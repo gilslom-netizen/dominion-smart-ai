@@ -6,6 +6,7 @@
 //! their buy menus, and so that search rollouts land in plausible positions
 //! instead of nonsense ones.
 
+use dominion_core::card::NUM_CARDS;
 use dominion_core::{Card, Ctx, Decision, GameState, Move, PlayerState, Rng};
 
 use crate::Agent;
@@ -122,27 +123,44 @@ fn worth_trashing(card: Card, state: &GameState, p: usize) -> bool {
 
 /// A summary of what a player's deck is made of, computed once per decision
 /// rather than once per candidate card.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct DeckStats {
     pub total: u32,
-    pub coppers: u32,
+    /// How many copies of each card the player owns, indexed by `Card::idx`.
+    /// Precomputed because the ranking asks about half a dozen cards per
+    /// candidate, and walking the deck for each one made the rollout — and so
+    /// the whole search — more than twice as slow.
+    pub owned: [u8; NUM_CARDS],
     /// Actions that consume the turn's only Action and give none back.
     pub terminals: u32,
     /// Actions granting +2 Actions, which is what makes terminals stackable.
     pub villages: u32,
     pub coin_value: u32,
+    /// Whether any opponent owns an Attack, the only reason to want a Moat.
+    pub under_attack: bool,
+}
+
+impl Default for DeckStats {
+    fn default() -> Self {
+        DeckStats {
+            total: 0,
+            owned: [0; NUM_CARDS],
+            terminals: 0,
+            villages: 0,
+            coin_value: 0,
+            under_attack: false,
+        }
+    }
 }
 
 impl DeckStats {
-    pub fn of(p: &PlayerState) -> Self {
+    pub fn of(state: &GameState, player: usize) -> Self {
         use Card::*;
         let mut st = DeckStats::default();
-        for c in p.all_cards() {
+        for c in state.players[player].all_cards() {
             st.total += 1;
+            st.owned[c.idx()] = st.owned[c.idx()].saturating_add(1);
             st.coin_value += c.coin_value() as u32;
-            if c == Copper {
-                st.coppers += 1;
-            }
             match c {
                 Village | Festival => st.villages += 1,
                 // Cantrips replace the Action they cost, so they are free.
@@ -151,7 +169,22 @@ impl DeckStats {
                 _ => {}
             }
         }
+        st.under_attack = state
+            .players
+            .iter()
+            .enumerate()
+            .any(|(i, p)| i != player && p.all_cards().any(|c| c.is_attack()));
         st
+    }
+
+    #[inline]
+    pub fn count(&self, card: Card) -> i32 {
+        self.owned[card.idx()] as i32
+    }
+
+    #[inline]
+    pub fn coppers(&self) -> u32 {
+        self.owned[Card::Copper.idx()] as u32
     }
 
     /// How many more terminals the deck can absorb before they start colliding.
@@ -169,10 +202,10 @@ impl DeckStats {
 /// rollout policy that assigns value to leaf positions — so a version that only
 /// ever buys money makes the search structurally blind to engines, no matter
 /// how many iterations it runs.
-pub fn gain_preference(card: Card, state: &GameState, player: usize, st: &DeckStats) -> i32 {
+pub fn gain_preference(card: Card, state: &GameState, _player: usize, st: &DeckStats) -> i32 {
     use Card::*;
     let pl = provinces_left(state);
-    let owned = |c: Card| state.players[player].count_owned(c) as i32;
+    let owned = |c: Card| st.count(c);
     let room = st.terminal_room();
     let _ = pl > 5;
 
@@ -222,7 +255,7 @@ pub fn gain_preference(card: Card, state: &GameState, player: usize, st: &DeckSt
         Village if room < 0 => 690,
         Festival if room < 0 => 680,
         // Only bother with a Moat if somebody is actually attacking.
-        Moat if room > 0 && owned(Moat) < 1 && opponent_has_attack(state, player) => 670,
+        Moat if room > 0 && owned(Moat) < 1 && st.under_attack => 670,
 
         // --- things we do not want ----------------------------------------
         Estate | Duchy | Gardens => -100,
@@ -233,17 +266,6 @@ pub fn gain_preference(card: Card, state: &GameState, player: usize, st: &DeckSt
     }
 }
 
-/// Whether any opponent owns an Attack card, which is the only reason to want
-/// a Moat.
-fn opponent_has_attack(state: &GameState, player: usize) -> bool {
-    state
-        .players
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != player)
-        .any(|(_, p)| p.all_cards().any(|c| c.is_attack()))
-}
-
 /// Pick the best option for any decision, given a way to rank gains.
 pub fn default_move_with(
     state: &GameState,
@@ -252,7 +274,7 @@ pub fn default_move_with(
 ) -> Move {
     let p = d.player;
     let player = &state.players[p];
-    let stats = DeckStats::of(player);
+    let stats = DeckStats::of(state, d.player);
 
     // Convenience closures over the offered options.
     let selects = || -> Vec<Card> {
