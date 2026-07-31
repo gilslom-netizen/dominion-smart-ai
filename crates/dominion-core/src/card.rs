@@ -185,11 +185,11 @@ impl Card {
             Copper | Curse => 0,
             Estate | Cellar | Chapel | Moat => 2,
             Silver | Harbinger | Merchant | Vassal | Village | Workshop => 3,
-            Duchy | Bureaucrat | Gardens | Militia | Moneylender | Poacher | Remodel | Smithy
+            Bureaucrat | Gardens | Militia | Moneylender | Poacher | Remodel | Smithy
             | ThroneRoom => 4,
-            Gold | Bandit | CouncilRoom | Festival | Laboratory | Library | Market | Mine
+            Duchy | Bandit | CouncilRoom | Festival | Laboratory | Library | Market | Mine
             | Sentry | Witch => 5,
-            Artisan => 6,
+            Gold | Artisan => 6,
             Province => 8,
         }
     }

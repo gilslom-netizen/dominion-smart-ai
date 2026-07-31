@@ -77,6 +77,65 @@ fn count(zone: &[Card], c: Card) -> usize {
     zone.iter().filter(|&&x| x == c).count()
 }
 
+// ------------------------------------------------------------ card data
+
+/// Costs are the foundation every buy decision rests on, and a wrong one is
+/// invisible at runtime — it just quietly makes the bots play a different game.
+#[test]
+fn every_card_costs_what_it_says_on_the_box() {
+    let expected: &[(Card, u8)] = &[
+        (Copper, 0),
+        (Curse, 0),
+        (Estate, 2),
+        (Silver, 3),
+        (Duchy, 5),
+        (Gold, 6),
+        (Province, 8),
+        (Cellar, 2),
+        (Chapel, 2),
+        (Moat, 2),
+        (Harbinger, 3),
+        (Merchant, 3),
+        (Vassal, 3),
+        (Village, 3),
+        (Workshop, 3),
+        (Bureaucrat, 4),
+        (Gardens, 4),
+        (Militia, 4),
+        (Moneylender, 4),
+        (Poacher, 4),
+        (Remodel, 4),
+        (Smithy, 4),
+        (ThroneRoom, 4),
+        (Bandit, 5),
+        (CouncilRoom, 5),
+        (Festival, 5),
+        (Laboratory, 5),
+        (Library, 5),
+        (Market, 5),
+        (Mine, 5),
+        (Sentry, 5),
+        (Witch, 5),
+        (Artisan, 6),
+    ];
+    assert_eq!(expected.len(), dominion_core::NUM_CARDS, "a card is missing");
+    for &(card, cost) in expected {
+        assert_eq!(card.cost(), cost, "{card} should cost ${cost}");
+    }
+}
+
+#[test]
+fn card_types_are_right() {
+    assert!(Moat.is_action() && Moat.is_reaction());
+    assert!(Gardens.is_victory() && !Gardens.is_action());
+    for c in [Militia, Witch, Bandit, Bureaucrat] {
+        assert!(c.is_attack() && c.is_action(), "{c} is an Attack");
+    }
+    assert_eq!(Copper.coin_value(), 1);
+    assert_eq!(Silver.coin_value(), 2);
+    assert_eq!(Gold.coin_value(), 3);
+}
+
 // ---------------------------------------------------------------- vanilla
 
 #[test]
@@ -383,19 +442,19 @@ fn sentry_puts_kept_cards_back_in_the_chosen_order() {
 
 #[test]
 fn artisan_gains_to_hand_then_topdecks() {
-    let mut g = scenario(&[Artisan], |s| {
+    let mut g = scenario(&[Artisan, Market], |s| {
         s.players[0].hand = vec![Artisan, Copper];
         s.players[0].deck = vec![Estate; 3];
     });
     play(&mut g, Move::Play(Artisan));
     expect_ctx(&g, Ctx::ArtisanGain);
     let opts = &g.decision().unwrap().options;
-    assert!(opts.contains(&Move::Select(Gold)), "$5 budget reaches Gold");
-    assert!(!opts.contains(&Move::Select(Province)));
-    play(&mut g, Move::Select(Gold));
+    assert!(opts.contains(&Move::Select(Market)), "$5 budget reaches Market");
+    assert!(!opts.contains(&Move::Select(Gold)), "Gold costs $6");
+    play(&mut g, Move::Select(Market));
     expect_ctx(&g, Ctx::ArtisanTopdeck);
-    play(&mut g, Move::Select(Gold));
-    assert_eq!(*g.state.players[0].deck.last().unwrap(), Gold);
+    play(&mut g, Move::Select(Market));
+    assert_eq!(*g.state.players[0].deck.last().unwrap(), Market);
     assert_eq!(hand_of(&g, 0), vec![Copper]);
 }
 
