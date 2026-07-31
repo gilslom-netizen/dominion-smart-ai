@@ -137,6 +137,18 @@ pub fn run_match(
     seed: u64,
     kingdoms: &Kingdoms,
 ) -> MatchResult {
+    run_range(a, b, 0..pairs, seed, kingdoms)
+}
+
+/// As [`run_match`], but over an explicit slice of the seed range so the work
+/// can be split across threads without changing which games get played.
+pub fn run_range(
+    a: &mut dyn Agent,
+    b: &mut dyn Agent,
+    range: std::ops::Range<u32>,
+    seed: u64,
+    kingdoms: &Kingdoms,
+) -> MatchResult {
     let mut res = MatchResult {
         name_a: a.name(),
         name_b: b.name(),
@@ -145,7 +157,7 @@ pub fn run_match(
     let start = Instant::now();
     let mut total_turns = 0u64;
 
-    for i in 0..pairs {
+    for i in range {
         let game_seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(i as u64);
         let mut krng = Rng::new(game_seed ^ 0xDEAD_BEEF);
         let kingdom = kingdoms.pick(&mut krng);
@@ -172,6 +184,75 @@ pub fn run_match(
     }
 
     res.avg_turns = total_turns as f32 / res.games.max(1) as f32;
+    res.elapsed_secs = start.elapsed().as_secs_f64();
+    res
+}
+
+/// Merge two independently-run halves of the same match.
+fn merge(mut acc: MatchResult, other: MatchResult) -> MatchResult {
+    let turns = acc.avg_turns * acc.games as f32 + other.avg_turns * other.games as f32;
+    acc.games += other.games;
+    acc.score_a += other.score_a;
+    acc.wins_a += other.wins_a;
+    acc.wins_b += other.wins_b;
+    acc.ties += other.ties;
+    acc.avg_turns = turns / acc.games.max(1) as f32;
+    if acc.name_a.is_empty() {
+        acc.name_a = other.name_a;
+        acc.name_b = other.name_b;
+    }
+    acc
+}
+
+/// Run a match across `threads` OS threads.
+///
+/// Agents are stateful (they carry their own RNG), so each thread builds its
+/// own pair from the supplied factories. The seed range is partitioned rather
+/// than re-derived, so a parallel run plays exactly the same games as a serial
+/// one — only faster. Search agents are the reason this exists: they are three
+/// to four orders of magnitude slower per game than the heuristics.
+pub fn run_match_parallel<FA, FB>(
+    make_a: FA,
+    make_b: FB,
+    pairs: u32,
+    seed: u64,
+    kingdoms: &Kingdoms,
+    threads: usize,
+) -> MatchResult
+where
+    FA: Fn() -> Box<dyn Agent> + Sync,
+    FB: Fn() -> Box<dyn Agent> + Sync,
+{
+    let threads = threads.max(1).min(pairs.max(1) as usize);
+    let start = Instant::now();
+
+    let chunks: Vec<std::ops::Range<u32>> = (0..threads)
+        .map(|t| {
+            let lo = (pairs as usize * t / threads) as u32;
+            let hi = (pairs as usize * (t + 1) / threads) as u32;
+            lo..hi
+        })
+        .filter(|r| !r.is_empty())
+        .collect();
+
+    let parts: Vec<MatchResult> = std::thread::scope(|scope| {
+        let handles: Vec<_> = chunks
+            .into_iter()
+            .map(|range| {
+                let make_a = &make_a;
+                let make_b = &make_b;
+                scope.spawn(move || {
+                    let mut a = make_a();
+                    let mut b = make_b();
+                    run_range(a.as_mut(), b.as_mut(), range, seed, kingdoms)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let mut res = parts.into_iter().fold(MatchResult::default(), merge);
+    // Wall-clock, not the sum of per-thread times.
     res.elapsed_secs = start.elapsed().as_secs_f64();
     res
 }

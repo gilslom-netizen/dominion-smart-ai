@@ -31,5 +31,5 @@ pub trait Agent {
 }
 
 pub use buy::{BuyMenu, MenuBot};
-pub use match_runner::{play_game, run_match, MatchResult};
-pub use policy::RandomAgent;
+pub use match_runner::{play_game, run_match, run_match_parallel, Kingdoms, MatchResult};
+pub use policy::{DeckStats, HeuristicBot, RandomAgent};

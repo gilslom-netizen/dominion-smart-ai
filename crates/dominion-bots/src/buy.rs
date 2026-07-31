@@ -7,6 +7,8 @@
 
 use dominion_core::{Card, Decision, GameState, Move};
 
+use crate::policy::DeckStats;
+
 use crate::policy;
 use crate::Agent;
 
@@ -75,14 +77,14 @@ impl BuyMenu {
     /// Score a card as a gain target. Cards the menu does not want score
     /// negative, so the buy phase declines them — but a forced gain (Workshop,
     /// Remodel) still picks the least bad option.
-    pub fn rank(&self, card: Card, state: &GameState, player: usize) -> i32 {
+    pub fn rank(&self, card: Card, state: &GameState, player: usize, st: &DeckStats) -> i32 {
         match self
             .rules
             .iter()
             .position(|r| r.matches(card, state, player))
         {
             Some(i) => 100_000 - (i as i32) * 100,
-            None => policy::gain_preference(card, state, player) - 100_000,
+            None => policy::gain_preference(card, state, player, st) - 100_000,
         }
     }
 }
@@ -102,7 +104,7 @@ impl MenuBot {
 impl Agent for MenuBot {
     fn decide(&mut self, state: &GameState, d: &Decision) -> Move {
         let menu = &self.menu;
-        policy::default_move_with(state, d, &|c, s, p| menu.rank(c, s, p))
+        policy::default_move_with(state, d, &|c, s, p, st| menu.rank(c, s, p, st))
     }
     fn name(&self) -> String {
         self.menu.name.clone()

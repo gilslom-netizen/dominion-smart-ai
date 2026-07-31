@@ -8,7 +8,7 @@
 
 use dominion_bots::buy::{ladder, required_kingdom, MenuBot};
 use dominion_bots::match_runner::{run_match, Kingdoms};
-use dominion_bots::policy::RandomAgent;
+use dominion_bots::policy::{HeuristicBot, RandomAgent};
 use dominion_bots::Agent;
 
 fn main() {
@@ -40,6 +40,17 @@ fn main() {
             counts[i] += 1;
             counts[j] += 1;
         }
+    }
+
+    // The menu-free heuristic, measured against the whole ladder. This is the
+    // baseline the search agents have to beat to have earned their cost.
+    println!();
+    for menu in &menus {
+        let mut h = HeuristicBot;
+        let mut foe = MenuBot::new(menu.clone());
+        let must = required_kingdom(menu);
+        let res = run_match(&mut h, &mut foe, pairs, 0xC0FFEE, &Kingdoms::RandomWith(must));
+        println!("{res}");
     }
 
     // Sanity floor: the weakest menu should still crush random play.

@@ -120,33 +120,139 @@ fn worth_trashing(card: Card, state: &GameState, p: usize) -> bool {
     }
 }
 
-/// Ranking used when *gaining* a card (Workshop, Remodel, Artisan, Mine).
-/// Deliberately money-first: it is the fallback when a strategy has no opinion.
-pub fn gain_preference(card: Card, state: &GameState, _player: usize) -> i32 {
+/// A summary of what a player's deck is made of, computed once per decision
+/// rather than once per candidate card.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DeckStats {
+    pub total: u32,
+    pub coppers: u32,
+    /// Actions that consume the turn's only Action and give none back.
+    pub terminals: u32,
+    /// Actions granting +2 Actions, which is what makes terminals stackable.
+    pub villages: u32,
+    pub coin_value: u32,
+}
+
+impl DeckStats {
+    pub fn of(p: &PlayerState) -> Self {
+        use Card::*;
+        let mut st = DeckStats::default();
+        for c in p.all_cards() {
+            st.total += 1;
+            st.coin_value += c.coin_value() as u32;
+            if c == Copper {
+                st.coppers += 1;
+            }
+            match c {
+                Village | Festival => st.villages += 1,
+                // Cantrips replace the Action they cost, so they are free.
+                Market | Laboratory | Merchant | Poacher | Harbinger | Cellar | Sentry => {}
+                c if c.is_action() => st.terminals += 1,
+                _ => {}
+            }
+        }
+        st
+    }
+
+    /// How many more terminals the deck can absorb before they start colliding.
+    /// One Action per turn, plus two per Village.
+    pub fn terminal_room(&self) -> i32 {
+        1 + 2 * self.villages as i32 - self.terminals as i32
+    }
+}
+
+/// Ranking used for every gain: buying, but also Workshop, Remodel, Artisan and
+/// Mine.
+///
+/// This is the single most important heuristic in the project. It is the buy
+/// policy of the baseline bots, the prior that steers the search, *and* the
+/// rollout policy that assigns value to leaf positions — so a version that only
+/// ever buys money makes the search structurally blind to engines, no matter
+/// how many iterations it runs.
+pub fn gain_preference(card: Card, state: &GameState, player: usize, st: &DeckStats) -> i32 {
     use Card::*;
     let pl = provinces_left(state);
+    let owned = |c: Card| state.players[player].count_owned(c) as i32;
+    let room = st.terminal_room();
+    let _ = pl > 5;
+
+    // A deck has room for very few terminals, and they are not interchangeable.
+    // Buying a $4 Smithy on turn two uses up the only slot and locks out the
+    // Witch the deck really wanted — which is exactly how an earlier version
+    // managed to lose 72% to Double Witch while ranking Witch above Gold.
+    // So the slot is reserved until the Witches are bought.
+    let saving_for_witch = state.in_supply[Witch.idx()]
+        && state.supply_of(Witch) > 0
+        && owned(Witch) < 2
+        // Two Witches is standard even with no Village to stack them on: the
+        // curse output is worth the occasional collision.
+        && room >= 0;
+
+    // The ranking is calibrated against the benchmark ladder, not against
+    // intuition. An earlier version that bought a wide spread of engine pieces
+    // scored *worse* than plain Big Money + Smithy, because a deck with one of
+    // everything draws none of them. What survives measurement is: money as the
+    // spine, cursing above Gold, and exactly as many terminals as the deck can
+    // actually play.
     match card {
         Province => 1000,
-        Gold => 900,
-        // Duchies only once the game is nearly over.
-        Duchy if pl <= 4 => 850,
-        Silver => 700,
-        Estate if pl <= 2 => 600,
         Curse => -1000,
+
+        // --- endgame greening --------------------------------------------
+        Duchy if pl <= 4 => 880,
+        Estate if pl <= 2 => 700,
+
+        // --- the few cards worth more than money -------------------------
+        // Handing out Curses is the strongest effect in the Base set.
+        Witch if owned(Witch) < 2 && room >= 0 => 960,
+        Gold => 900,
+        // A cantrip that draws two: strictly better than the Silver it replaces.
+        Laboratory if room >= 0 => 890,
+        // One terminal draw is the classic Big Money upgrade; a second one
+        // without Villages just collides with the first.
+        Smithy if room > 0 && !saving_for_witch && owned(Smithy) < 1 => 860,
+        Militia if room > 0 && !saving_for_witch && owned(Militia) < 1 => 835,
+        CouncilRoom if room > 0 && !saving_for_witch && owned(CouncilRoom) < 1 && owned(Smithy) == 0 => 830,
+        // Cantrips add economy without diluting the draw.
+        Market if owned(Market) < 3 => 760,
+
+        Silver => 700,
+
+        // Villages only once terminals are genuinely colliding.
+        Village if room < 0 => 690,
+        Festival if room < 0 => 680,
+        // Only bother with a Moat if somebody is actually attacking.
+        Moat if room > 0 && owned(Moat) < 1 && opponent_has_attack(state, player) => 670,
+
+        // --- things we do not want ----------------------------------------
         Estate | Duchy | Gardens => -100,
         Copper => -50,
-        c => 400 + c.cost() as i32,
+        // Everything else is playable but worse than a Silver.
+        c if c.is_action() => 300 + c.cost() as i32,
+        _ => 100,
     }
+}
+
+/// Whether any opponent owns an Attack card, which is the only reason to want
+/// a Moat.
+fn opponent_has_attack(state: &GameState, player: usize) -> bool {
+    state
+        .players
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != player)
+        .any(|(_, p)| p.all_cards().any(|c| c.is_attack()))
 }
 
 /// Pick the best option for any decision, given a way to rank gains.
 pub fn default_move_with(
     state: &GameState,
     d: &Decision,
-    gain_rank: &dyn Fn(Card, &GameState, usize) -> i32,
+    gain_rank: &dyn Fn(Card, &GameState, usize, &DeckStats) -> i32,
 ) -> Move {
     let p = d.player;
     let player = &state.players[p];
+    let stats = DeckStats::of(player);
 
     // Convenience closures over the offered options.
     let selects = || -> Vec<Card> {
@@ -161,7 +267,7 @@ pub fn default_move_with(
     let best_gain = |cards: Vec<Card>| -> Option<Card> {
         cards
             .into_iter()
-            .max_by_key(|&c| gain_rank(c, state, p))
+            .max_by_key(|&c| gain_rank(c, state, p, &stats))
     };
 
     match d.ctx {
@@ -191,7 +297,7 @@ pub fn default_move_with(
                 })
                 .collect();
             match best_gain(buys) {
-                Some(c) if gain_rank(c, state, p) > 0 => Move::Buy(c),
+                Some(c) if gain_rank(c, state, p, &stats) > 0 => Move::Buy(c),
                 _ => Move::Done,
             }
         }
@@ -233,7 +339,7 @@ pub fn default_move_with(
             let best = selects()
                 .into_iter()
                 .filter(|c| !c.is_victory() && !c.is_curse())
-                .max_by_key(|&c| gain_rank(c, state, p));
+                .max_by_key(|&c| gain_rank(c, state, p, &stats));
             best.map(Move::Select).unwrap_or(Move::Done)
         }
 
@@ -338,14 +444,14 @@ pub fn default_move_with(
         // Draw the better card first.
         Ctx::SentryOrder => selects()
             .into_iter()
-            .max_by_key(|&c| gain_rank(c, state, p))
+            .max_by_key(|&c| gain_rank(c, state, p, &stats))
             .map(Move::Select)
             .unwrap_or(Move::Done),
 
         // Topdeck the card we most want to draw next turn.
         Ctx::ArtisanTopdeck => selects()
             .into_iter()
-            .max_by_key(|&c| gain_rank(c, state, p))
+            .max_by_key(|&c| gain_rank(c, state, p, &stats))
             .map(Move::Select)
             .unwrap_or(Move::Done),
     }
@@ -384,5 +490,21 @@ impl Agent for RandomAgent {
     }
     fn name(&self) -> String {
         "Random".into()
+    }
+}
+
+/// The shared heuristic as a bot in its own right, with no buy menu on top.
+///
+/// It is the honest baseline for the search agents, since it is exactly the
+/// policy their rollouts use: any strength the search shows over this bot comes
+/// from the search itself, not from a better hand-written strategy.
+pub struct HeuristicBot;
+
+impl Agent for HeuristicBot {
+    fn decide(&mut self, state: &GameState, d: &Decision) -> Move {
+        default_move(state, d)
+    }
+    fn name(&self) -> String {
+        "Heuristic".into()
     }
 }

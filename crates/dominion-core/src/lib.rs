@@ -13,12 +13,14 @@
 pub mod card;
 pub mod determinize;
 pub mod engine;
+pub mod log;
 pub mod rng;
 pub mod state;
 
 pub use card::{Card, CardCounts, Types, ALL_CARDS, BASIC_CARDS, KINGDOM_CARDS, NUM_CARDS};
 pub use determinize::determinize;
 pub use engine::{EngineError, Game};
+pub use log::{GameLog, LogError, RecordedGame};
 pub use rng::Rng;
 pub use state::{
     Ctx, Decision, Dest, Frame, FrameKind, GameState, Move, PlayerState, MAX_PLAYERS, MOVE_SPACE,
