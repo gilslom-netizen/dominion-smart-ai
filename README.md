@@ -106,10 +106,19 @@ the search picked noise. Three fixes, all structural:
 * **PUCT with first-play urgency** — `Q + c·P·√N/(1+n)` — instead of expanding
   every child once before learning anything.
 
-At 8 worlds × 400 iterations the search beats the heuristic it is built on
-**60.4% ± 4.5%** (+73 Elo, 120 games). That comparison is the honest one: the
-search uses that heuristic as both its prior and its rollout policy, so the
-margin is strength the search itself added, not a better hand-written strategy.
+At 8 worlds × 400 iterations, over 120 games per matchup:
+
+| | win rate | Elo |
+|---|---|---|
+| MCTS vs Heuristic | 60.4% ± 4.5% | +73 |
+| MCTS vs DoubleWitch | 64.2% ± 4.4% | +101 |
+
+The first row is the honest one: the search uses that heuristic as both its prior
+and its rollout policy, so the margin is strength the search itself added, not a
+better hand-written strategy. The second is a cross-check, and it lines up — the
+heuristic beats Double Witch 53.5%, so a search worth +73 Elo on top of it should
+land near 64%, and it does. Intransitive results here would have meant the
+measurements were noise.
 
 It is also a modest margin, and the reason is structural rather than a matter of
 tuning. The search evaluates a position by rolling it out with the heuristic, so
