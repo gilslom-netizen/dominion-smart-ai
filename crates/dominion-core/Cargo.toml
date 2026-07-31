@@ -1,0 +1,10 @@
+[package]
+name = "dominion-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rules engine for Dominion (Base set, 2nd edition)"
+
+[dependencies]
+
+[dev-dependencies]

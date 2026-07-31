@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.pt
+*.npz
+/data
+__pycache__/
