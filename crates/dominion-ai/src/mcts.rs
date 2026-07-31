@@ -16,6 +16,7 @@ use dominion_bots::Agent;
 use dominion_core::state::MAX_PLAYERS;
 use dominion_core::{determinize, Decision, Game, GameState, Move, Rng};
 
+use crate::evaluator::{Evaluator, HeuristicEvaluator};
 use crate::prior;
 
 #[derive(Clone, Copy, Debug)]
@@ -87,11 +88,11 @@ impl Tree {
         }
     }
 
-    fn ensure_edges(&mut self, node: usize, state: &GameState, d: &Decision) {
+    fn ensure_edges(&mut self, node: usize, state: &GameState, d: &Decision, eval: &dyn Evaluator) {
         if self.nodes[node].edges.is_empty() {
             self.nodes[node].player = d.player as u8;
             let options = prior::restrict(state, d);
-            let priors = prior::priors(state, d, &options);
+            let priors = eval.priors(state, d, &options);
             self.nodes[node].edges = options
                 .iter()
                 .zip(priors)
@@ -164,8 +165,8 @@ fn rollout(mut game: Game) -> [f32; MAX_PLAYERS] {
     out
 }
 
-/// One UCT iteration in a fixed (fully known) world.
-fn iterate(tree: &mut Tree, root: &GameState, exploration: f32) {
+/// One PUCT iteration in a fixed (fully known) world.
+fn iterate(tree: &mut Tree, root: &GameState, exploration: f32, eval: &dyn Evaluator) {
     let mut game = Game {
         state: root.clone(),
     };
@@ -177,26 +178,62 @@ fn iterate(tree: &mut Tree, root: &GameState, exploration: f32) {
             break;
         }
         let d = game.decision().expect("live game has a decision").clone();
-        tree.ensure_edges(node, &game.state, &d);
+        tree.ensure_edges(node, &game.state, &d, eval);
 
         let edge_idx = tree.select(node, exploration);
         let edge = tree.nodes[node].edges[edge_idx];
         game.apply(edge.mv).expect("tree move is legal");
 
         if edge.child == NO_CHILD {
-            // Expand one new node, then roll out from it.
+            // Expand one new node. If the evaluator can price this leaf
+            // directly, use that instead of playing the game out — that is
+            // the entire benefit of a trained value head over a heuristic
+            // rollout: an O(1) estimate instead of simulating the rest of
+            // the game.
             let next_player = game.decision().map(|d| d.player).unwrap_or(0);
             tree.nodes.push(Node::new(next_player));
             let new_idx = (tree.nodes.len() - 1) as u32;
             tree.nodes[node].edges[edge_idx].child = new_idx;
             path.push(new_idx as usize);
-            break;
+
+            let result = if game.is_over() {
+                let mut out = [0.0; MAX_PLAYERS];
+                for (i, r) in game.state.results().into_iter().enumerate() {
+                    out[i] = r;
+                }
+                out
+            } else if let Some(v) = eval.leaf_value(&game.state, next_player) {
+                let mut out = [0.0; MAX_PLAYERS];
+                out[next_player] = v;
+                for (i, o) in out.iter_mut().enumerate() {
+                    if i != next_player {
+                        *o = 1.0 - v;
+                    }
+                }
+                out
+            } else {
+                rollout(game)
+            };
+
+            for &n in &path {
+                let node = &mut tree.nodes[n];
+                node.visits += 1;
+                for p in 0..MAX_PLAYERS {
+                    node.sum[p] += result[p];
+                }
+            }
+            return;
         }
         node = edge.child as usize;
         path.push(node);
     }
 
-    let result = rollout(game);
+    // The in-tree walk itself reached a finished game (can happen once the
+    // tree is deep enough), so the actual result is exact, not a rollout.
+    let mut result = [0.0; MAX_PLAYERS];
+    for (i, r) in game.state.results().into_iter().enumerate() {
+        result[i] = r;
+    }
     for &n in &path {
         let node = &mut tree.nodes[n];
         node.visits += 1;
@@ -227,6 +264,18 @@ pub fn search(
     cfg: &MctsConfig,
     rng: &mut Rng,
 ) -> (Move, Vec<(Move, u32)>) {
+    search_with(state, d, cfg, &HeuristicEvaluator, rng)
+}
+
+/// As [`search`], but steered by an arbitrary [`Evaluator`] — a trained
+/// network, a blend of network and heuristic, or the heuristic itself.
+pub fn search_with(
+    state: &GameState,
+    d: &Decision,
+    cfg: &MctsConfig,
+    eval: &dyn Evaluator,
+    rng: &mut Rng,
+) -> (Move, Vec<(Move, u32)>) {
     // Apply the same restriction the tree uses, so the root agrees with its
     // own children about what is worth considering.
     let options = prior::restrict(state, d);
@@ -239,7 +288,7 @@ pub fn search(
         let world = determinize(state, d.player, rng);
         let mut tree = Tree::new(d.player);
         for _ in 0..cfg.iterations {
-            iterate(&mut tree, &world, cfg.exploration);
+            iterate(&mut tree, &world, cfg.exploration, eval);
         }
         for e in &tree.nodes[0].edges {
             if e.child == NO_CHILD {
@@ -292,6 +341,44 @@ impl Agent for MctsAgent {
             return policy::default_move(state, d);
         }
         search(state, d, &self.cfg, &mut self.rng).0
+    }
+
+    fn name(&self) -> String {
+        self.label.clone()
+    }
+}
+
+/// Search steered by a trained network instead of the heuristic, for measuring
+/// what the network has actually learned.
+pub struct NetMctsAgent<'a> {
+    pub cfg: MctsConfig,
+    rng: Rng,
+    net: &'a crate::net::Net,
+    label: String,
+}
+
+impl<'a> NetMctsAgent<'a> {
+    pub fn new(cfg: MctsConfig, net: &'a crate::net::Net) -> Self {
+        let label = format!("NetMCTS({}x{})", cfg.worlds, cfg.iterations);
+        NetMctsAgent {
+            rng: Rng::new(cfg.seed),
+            cfg,
+            net,
+            label,
+        }
+    }
+}
+
+impl<'a> Agent for NetMctsAgent<'a> {
+    fn decide(&mut self, state: &GameState, d: &Decision) -> Move {
+        if d.options.len() == 1 {
+            return d.options[0];
+        }
+        if self.cfg.skip_trivial && is_trivial(d) {
+            return policy::default_move(state, d);
+        }
+        let eval = crate::evaluator::NetEvaluator { net: self.net };
+        search_with(state, d, &self.cfg, &eval, &mut self.rng).0
     }
 
     fn name(&self) -> String {

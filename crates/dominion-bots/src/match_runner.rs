@@ -211,7 +211,7 @@ fn merge(mut acc: MatchResult, other: MatchResult) -> MatchResult {
 /// than re-derived, so a parallel run plays exactly the same games as a serial
 /// one — only faster. Search agents are the reason this exists: they are three
 /// to four orders of magnitude slower per game than the heuristics.
-pub fn run_match_parallel<FA, FB>(
+pub fn run_match_parallel<'e, FA, FB>(
     make_a: FA,
     make_b: FB,
     pairs: u32,
@@ -220,8 +220,8 @@ pub fn run_match_parallel<FA, FB>(
     threads: usize,
 ) -> MatchResult
 where
-    FA: Fn() -> Box<dyn Agent> + Sync,
-    FB: Fn() -> Box<dyn Agent> + Sync,
+    FA: Fn() -> Box<dyn Agent + 'e> + Sync,
+    FB: Fn() -> Box<dyn Agent + 'e> + Sync,
 {
     let threads = threads.max(1).min(pairs.max(1) as usize);
     let start = Instant::now();
