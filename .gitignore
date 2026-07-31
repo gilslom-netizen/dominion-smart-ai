@@ -4,3 +4,8 @@
 *.npz
 /data
 __pycache__/
+
+# Raw self-play shards are hundreds of MB for a real run (1500 games ~ 215MB)
+# and GitHub hard-rejects files over 100MB. Train locally right after
+# generating, share only the trained weights (models/*.bin, tens of KB).
+/selfplay-data/
