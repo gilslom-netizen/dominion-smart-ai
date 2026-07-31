@@ -258,6 +258,12 @@ pub struct PlayerState {
     /// Cards set aside by an in-flight effect (Library).
     pub set_aside: Vec<Card>,
 
+    /// How many cards on top of `deck` the owner knows the identity of,
+    /// because they put them there (Harbinger, Artisan, Sentry, Bureaucrat).
+    /// Determinization must not shuffle these away — topdecking is most of the
+    /// value of those cards.
+    pub known_top: u8,
+
     pub actions: u8,
     pub buys: u8,
     pub coins: u8,

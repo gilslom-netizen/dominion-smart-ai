@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/dominion-core", "crates/dominion-bots"]
+members = ["crates/dominion-core", "crates/dominion-bots", "crates/dominion-ai"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,0 +1,10 @@
+[package]
+name = "dominion-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Search-based Dominion agents"
+
+[dependencies]
+dominion-core = { path = "../dominion-core" }
+dominion-bots = { path = "../dominion-bots" }

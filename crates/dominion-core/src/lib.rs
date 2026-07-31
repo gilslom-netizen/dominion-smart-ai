@@ -11,11 +11,13 @@
 //! * **Forced moves auto-resolve**, so callers only see choices that matter.
 
 pub mod card;
+pub mod determinize;
 pub mod engine;
 pub mod rng;
 pub mod state;
 
 pub use card::{Card, CardCounts, Types, ALL_CARDS, BASIC_CARDS, KINGDOM_CARDS, NUM_CARDS};
+pub use determinize::determinize;
 pub use engine::{EngineError, Game};
 pub use rng::Rng;
 pub use state::{

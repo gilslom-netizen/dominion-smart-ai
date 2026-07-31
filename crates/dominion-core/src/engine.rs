@@ -350,7 +350,10 @@ impl Game {
                 match dest {
                     Dest::Discard => pl.discard.push(card),
                     Dest::Hand => pl.hand.push(card),
-                    Dest::DeckTop => pl.deck.push(card),
+                    Dest::DeckTop => {
+                        pl.deck.push(card);
+                        pl.known_top += 1;
+                    }
                 }
             }
 
@@ -477,6 +480,7 @@ impl Game {
                     let pl = &mut self.state.players[victim];
                     remove_one(&mut pl.hand, c);
                     pl.deck.push(c);
+                    pl.known_top += 1;
                 }
             }
 
@@ -657,6 +661,7 @@ impl Game {
                     let pl = &mut self.state.players[p];
                     remove_one(&mut pl.discard, c);
                     pl.deck.push(c);
+                    pl.known_top += 1;
                     return;
                 }
                 if ans == Some(Move::Done) {
@@ -972,6 +977,7 @@ impl Game {
                             let pl = &mut self.state.players[p];
                             remove_one(&mut pl.hand, c);
                             pl.deck.push(c);
+                            pl.known_top += 1;
                         }
                     }
                 }
@@ -1013,17 +1019,24 @@ impl Game {
             let mut rest = looked.clone();
             remove_one(&mut rest, top);
             let pl = &mut self.state.players[p];
+            pl.known_top += (rest.len() + 1) as u8;
             pl.deck.extend(rest);
             pl.deck.push(top);
             return;
         }
         match looked.len() {
             0 => {}
-            1 => self.state.players[p].deck.push(looked[0]),
+            1 => {
+                let pl = &mut self.state.players[p];
+                pl.deck.push(looked[0]);
+                pl.known_top += 1;
+            }
             _ => {
                 let opts = distinct(&looked);
                 if opts.len() == 1 {
-                    self.state.players[p].deck.extend(looked);
+                    let pl = &mut self.state.players[p];
+                    pl.known_top += looked.len() as u8;
+                    pl.deck.extend(looked);
                 } else {
                     f.step = 4;
                     let opts: Vec<Move> = opts.into_iter().map(Move::Select).collect();
@@ -1056,12 +1069,18 @@ fn pop_deck(state: &mut GameState, p: usize) -> Option<Card> {
         }
         let pl = &mut state.players[p];
         std::mem::swap(&mut pl.deck, &mut pl.discard);
-        let deck = std::mem::take(&mut pl.deck);
-        let mut deck = deck;
+        let mut deck = std::mem::take(&mut pl.deck);
         state.rng.shuffle(&mut deck);
         state.players[p].deck = deck;
+        // A reshuffle destroys whatever the owner knew about deck order.
+        state.players[p].known_top = 0;
     }
-    state.players[p].deck.pop()
+    let card = state.players[p].deck.pop();
+    if card.is_some() {
+        let pl = &mut state.players[p];
+        pl.known_top = pl.known_top.saturating_sub(1);
+    }
+    card
 }
 
 /// All cards that could appear in any game, for feature encoding.
