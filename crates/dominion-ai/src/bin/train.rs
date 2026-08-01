@@ -31,6 +31,9 @@ fn main() {
     let epochs: u32 = parse_flag("--epochs").and_then(|s| s.parse().ok()).unwrap_or(6);
     let lr: f32 = parse_flag("--lr").and_then(|s| s.parse().ok()).unwrap_or(0.01);
     let eval_games: u32 = parse_flag("--eval-games").and_then(|s| s.parse().ok()).unwrap_or(60);
+    // TD targets are the default; --mc trains the value head on the raw final
+    // outcome instead, so the two can be compared on identical data.
+    let use_td = !std::env::args().any(|a| a == "--mc");
 
     let shard_paths: Vec<String> = std::fs::read_dir("selfplay-data")
         .map(|rd| {
@@ -56,6 +59,16 @@ fn main() {
         std::process::exit(1);
     });
     println!("{} training examples", examples.len());
+    println!(
+        "value target: {}",
+        if use_td { "TD(lambda)" } else { "Monte Carlo (final outcome)" }
+    );
+    // If every TD target equals its outcome, the shards predate TD targets and
+    // the two modes would be identical — worth saying rather than silently
+    // reporting a pointless comparison.
+    if use_td && examples.iter().all(|e| e.td_target == e.outcome) {
+        println!("  (these shards are v1: no bootstrapped targets, so this is Monte Carlo)");
+    }
 
     let mut rng = Rng::new(0x7EA1);
     let mut net = match &net_in {
@@ -76,7 +89,8 @@ fn main() {
         for ex in &examples {
             let indices: Vec<usize> = ex.policy.iter().map(|(mv, _)| mv.index()).collect();
             let targets: Vec<f32> = ex.policy.iter().map(|(_, p)| *p).collect();
-            let (pl, vl) = net.train_step(&ex.features, &indices, &targets, ex.value, lr);
+            let target = ex.value_target(use_td);
+            let (pl, vl) = net.train_step(&ex.features, &indices, &targets, target, lr);
             policy_loss += pl as f64;
             value_loss += vl as f64;
         }

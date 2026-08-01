@@ -18,7 +18,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use dominion_ai::evaluator::{HeuristicEvaluator, NetEvaluator};
-use dominion_ai::{example, play_selfplay_game, MctsConfig, Net};
+use dominion_ai::selfplay::{play_selfplay_game_with_lambda, DEFAULT_LAMBDA};
+use dominion_ai::{example, MctsConfig, Net};
 use dominion_core::{Game, Rng};
 
 struct Args {
@@ -29,6 +30,7 @@ struct Args {
     worlds: u32,
     iterations: u32,
     seed: u64,
+    lambda: f32,
 }
 
 fn parse_args() -> Args {
@@ -49,6 +51,7 @@ fn parse_args() -> Args {
         worlds: get("--worlds").and_then(|s| s.parse().ok()).unwrap_or(8),
         iterations: get("--iterations").and_then(|s| s.parse().ok()).unwrap_or(300),
         seed: get("--seed").and_then(|s| s.parse().ok()).unwrap_or(0),
+        lambda: get("--lambda").and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_LAMBDA),
     }
 }
 
@@ -83,6 +86,7 @@ fn main() {
         args.threads,
         if net.is_some() { " (net-guided)" } else { " (heuristic-guided)" }
     );
+    println!("TD(lambda) = {}", args.lambda);
 
     let done = AtomicU32::new(0);
     let games = args.games;
@@ -107,15 +111,18 @@ fn main() {
                         let examples = match &net {
                             Some(n) => {
                                 let eval = NetEvaluator { net: n };
-                                play_selfplay_game(&kingdom, 2, game_seed, &cfg, &eval, &mut rng)
+                                play_selfplay_game_with_lambda(
+                                    &kingdom, 2, game_seed, &cfg, &eval, &mut rng, args.lambda,
+                                )
                             }
-                            None => play_selfplay_game(
+                            None => play_selfplay_game_with_lambda(
                                 &kingdom,
                                 2,
                                 game_seed,
                                 &cfg,
                                 &HeuristicEvaluator,
                                 &mut rng,
+                                args.lambda,
                             ),
                         };
                         out.extend(examples);

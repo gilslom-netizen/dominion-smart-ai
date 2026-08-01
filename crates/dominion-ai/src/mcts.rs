@@ -331,15 +331,31 @@ fn is_trivial(d: &Decision) -> bool {
     }
 }
 
-/// Search the position and return the best move, plus the ensemble's visit
-/// counts for inspection.
+/// Everything a search produced: the move, the visit distribution behind it,
+/// and the search's own opinion of the position.
+#[derive(Clone, Debug)]
+pub struct SearchOutcome {
+    pub best: Move,
+    /// Visits per move, in the order they were offered.
+    pub visits: Vec<(Move, u32)>,
+    /// The search's estimate of the deciding player's win probability, in
+    /// `[0, 1]`. This is the average result over every simulation that passed
+    /// through the root, so it is a far better estimate than a raw network
+    /// forward pass — which is exactly what makes it useful as a bootstrap
+    /// target when training the value head.
+    pub value: f32,
+}
+
+/// Search the position and return the best move, plus the visit counts for
+/// inspection.
 pub fn search(
     state: &GameState,
     d: &Decision,
     cfg: &MctsConfig,
     rng: &mut Rng,
 ) -> (Move, Vec<(Move, u32)>) {
-    search_with(state, d, cfg, &HeuristicEvaluator, rng)
+    let out = search_full(state, d, cfg, &HeuristicEvaluator, rng);
+    (out.best, out.visits)
 }
 
 /// As [`search`], but steered by an arbitrary [`Evaluator`] — a trained
@@ -351,11 +367,31 @@ pub fn search_with(
     eval: &dyn Evaluator,
     rng: &mut Rng,
 ) -> (Move, Vec<(Move, u32)>) {
+    let out = search_full(state, d, cfg, eval, rng);
+    (out.best, out.visits)
+}
+
+/// The full search, including the root's value estimate.
+pub fn search_full(
+    state: &GameState,
+    d: &Decision,
+    cfg: &MctsConfig,
+    eval: &dyn Evaluator,
+    rng: &mut Rng,
+) -> SearchOutcome {
     // Apply the same restriction the tree uses, so the root agrees with its
     // own children about what is worth considering.
     let options = prior::restrict(state, d);
     if options.len() == 1 {
-        return (options[0], vec![(options[0], 1)]);
+        // Forced move: no search happened, so there is no searched value to
+        // report. Fall back to whatever the evaluator thinks, or an even
+        // position if it has no opinion.
+        let value = eval.leaf_value(state, d.player).unwrap_or(0.5);
+        return SearchOutcome {
+            best: options[0],
+            visits: vec![(options[0], 1)],
+            value,
+        };
     }
     let mut totals: Vec<(Move, u32)> = options.iter().map(|&m| (m, 0)).collect();
 
@@ -394,7 +430,19 @@ pub fn search_with(
         .max_by_key(|(_, v)| *v)
         .map(|(m, _)| *m)
         .unwrap_or(options[0]);
-    (best, totals)
+
+    let root = &tree.nodes[0];
+    let value = if root.visits > 0 {
+        root.sum[d.player] / root.visits as f32
+    } else {
+        eval.leaf_value(state, d.player).unwrap_or(0.5)
+    };
+
+    SearchOutcome {
+        best,
+        visits: totals,
+        value,
+    }
 }
 
 /// A search agent, ready to drop into the match harness.

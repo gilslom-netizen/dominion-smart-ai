@@ -11,7 +11,7 @@ use dominion_core::Move;
 use crate::features::FEATURE_DIM;
 
 /// One decision from a finished self-play game: the position, the search's
-/// verdict on it, and the eventual outcome.
+/// verdict on it, and two different value targets for it.
 #[derive(Clone, Debug)]
 pub struct Example {
     pub features: [f32; FEATURE_DIM],
@@ -19,10 +19,31 @@ pub struct Example {
     /// paired with the fraction of visits each received. Sums to 1.
     pub policy: Vec<(Move, f32)>,
     /// The eventual result for the player who was deciding, in `[0, 1]`.
-    pub value: f32,
+    /// The pure Monte Carlo target: unbiased, but a single bit of signal
+    /// shared across every one of a game's ~240 decisions.
+    pub outcome: f32,
+    /// TD(lambda) target, mixing the outcome with the search's own value
+    /// estimates further along the trajectory. Both are stored so the two can
+    /// be compared without regenerating self-play data.
+    pub td_target: f32,
 }
 
-const MAGIC: u32 = 0xD0A1_5EAF;
+impl Example {
+    /// The target to train the value head against, for a given TD/MC choice.
+    pub fn value_target(&self, use_td: bool) -> f32 {
+        if use_td {
+            self.td_target
+        } else {
+            self.outcome
+        }
+    }
+}
+
+/// v1 stored a single `value` field. v2 stores `outcome` and `td_target`
+/// separately; v1 files stay readable, with both fields set to the old value.
+const MAGIC_V1: u32 = 0xD0A1_5EAF;
+const MAGIC_V2: u32 = 0xD0A1_5EB2;
+const MAGIC: u32 = MAGIC_V2;
 
 /// Append examples to a shard file, creating it if it does not exist.
 pub fn append_shard(path: &str, examples: &[Example]) -> std::io::Result<()> {
@@ -45,7 +66,8 @@ pub fn append_shard(path: &str, examples: &[Example]) -> std::io::Result<()> {
             rec.extend_from_slice(&(mv.index() as u32).to_le_bytes());
             rec.extend_from_slice(&p.to_le_bytes());
         }
-        rec.extend_from_slice(&ex.value.to_le_bytes());
+        rec.extend_from_slice(&ex.outcome.to_le_bytes());
+        rec.extend_from_slice(&ex.td_target.to_le_bytes());
         f.write_all(&rec)?;
     }
     Ok(())
@@ -72,9 +94,11 @@ pub fn read_shards(paths: &[String]) -> std::io::Result<Vec<Example>> {
 fn parse_shard(bytes: &[u8]) -> Option<Vec<Example>> {
     let mut pos = 0usize;
     let magic = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?);
-    if magic != MAGIC {
-        return None;
-    }
+    let v2 = match magic {
+        MAGIC_V2 => true,
+        MAGIC_V1 => false,
+        _ => return None,
+    };
     pos += 4;
 
     let read_f32 = |bytes: &[u8], pos: &mut usize| -> Option<f32> {
@@ -102,11 +126,15 @@ fn parse_shard(bytes: &[u8]) -> Option<Vec<Example>> {
             let mv = Move::from_index(idx)?;
             policy.push((mv, p));
         }
-        let value = read_f32(bytes, &mut pos)?;
+        let outcome = read_f32(bytes, &mut pos)?;
+        // v1 knew only the final outcome, so it is the best TD target it can
+        // offer; training on such a shard is simply pure Monte Carlo.
+        let td_target = if v2 { read_f32(bytes, &mut pos)? } else { outcome };
         out.push(Example {
             features,
             policy,
-            value,
+            outcome,
+            td_target,
         });
     }
     Some(out)
@@ -123,7 +151,8 @@ mod tests {
         Example {
             features,
             policy: vec![(Move::Buy(Card::Gold), 0.7), (Move::Buy(Card::Silver), 0.3)],
-            value,
+            outcome: value,
+            td_target: value * 0.5 + 0.25,
         }
     }
 
@@ -143,8 +172,9 @@ mod tests {
 
         let all = read_shard(&path).unwrap();
         assert_eq!(all.len(), 3);
-        assert_eq!(all[0].value, 0.0);
-        assert_eq!(all[2].value, 0.5);
+        assert_eq!(all[0].outcome, 0.0);
+        assert_eq!(all[0].td_target, 0.25);
+        assert_eq!(all[2].outcome, 0.5);
         assert_eq!(all[0].policy, batch1[0].policy);
         assert_eq!(all[0].features, batch1[0].features);
 
@@ -155,5 +185,27 @@ mod tests {
     fn garbage_is_rejected_not_panicked_on() {
         assert!(parse_shard(&[9, 9, 9]).is_none());
         assert!(parse_shard(&[]).is_none());
+    }
+
+    /// The 1500-game shard generated before TD targets existed must stay
+    /// usable; a v1 record simply has no bootstrapped target, so both fields
+    /// carry the final outcome.
+    #[test]
+    fn v1_shards_are_still_readable() {
+        let mut bytes = MAGIC_V1.to_le_bytes().to_vec();
+        for v in [0.0f32; FEATURE_DIM] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(Move::Buy(Card::Gold).index() as u32).to_le_bytes());
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        bytes.extend_from_slice(&0.75f32.to_le_bytes());
+
+        let parsed = parse_shard(&bytes).expect("v1 shard parses");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].outcome, 0.75);
+        assert_eq!(parsed[0].td_target, 0.75);
+        assert_eq!(parsed[0].value_target(true), 0.75);
+        assert_eq!(parsed[0].value_target(false), 0.75);
     }
 }
