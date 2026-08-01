@@ -1,10 +1,36 @@
-//! Determinized UCT — perfect-information Monte Carlo search.
+//! Information Set MCTS (ISMCTS) with a PUCT selection rule.
 //!
 //! The hidden information in Dominion is only *where* known cards are, never
-//! *which* cards exist (see [`dominion_core::determinize`]). So the standard
-//! recipe applies well here: sample several concrete worlds consistent with what
-//! the player can see, run an ordinary perfect-information UCT search in each,
-//! and pick the move the ensemble visited most.
+//! *which* cards exist (see [`dominion_core::determinize`]). So a
+//! determinization-based search is a good fit — but *how* the determinizations
+//! are combined matters a lot.
+//!
+//! This started as plain PIMC: N independent worlds, an independent tree in
+//! each, visit counts summed at the end. That wastes most of the budget. With 8
+//! worlds x 400 iterations, every node was backed by at most 400 samples even
+//! though 3200 were paid for, and the measured visit counts were correspondingly
+//! noisy.
+//!
+//! ISMCTS instead grows **one** tree and re-determinizes on every iteration, so
+//! all 3200 iterations accumulate into the same statistics. A tree node is an
+//! information set rather than a state: it holds every move seen under any
+//! determinization, and each iteration may only descend through the subset that
+//! its own world makes legal.
+//!
+//! Two details this needs, both standard:
+//!
+//! * **Availability counts.** A move that is only legal in a tenth of the worlds
+//!   gets a tenth of the chances to be tried, so comparing it against a
+//!   universally-legal sibling on raw visits would understate it. Exploration is
+//!   therefore scaled by how often each move was actually available, not by the
+//!   parent's total visits.
+//! * **Lazy edge discovery.** Nodes gain edges as new determinizations reveal
+//!   new legal moves, rather than being fixed at first visit.
+//!
+//! Dominion is unusually friendly to this: the deciding player's own hand is
+//! known to them, so at the root every determinization offers exactly the same
+//! moves. Move sets only start to diverge deeper in the tree, once cards have
+//! been drawn.
 //!
 //! Rollouts use the heuristic policy rather than random play. That is not an
 //! optimisation, it is a requirement: a uniformly random buy phase never builds
@@ -53,8 +79,11 @@ const NO_CHILD: u32 = u32::MAX;
 struct Edge {
     mv: Move,
     child: u32,
-    /// Prior probability of this move, from [`prior::priors`].
+    /// Prior probability of this move, from the evaluator.
     p: f32,
+    /// How many iterations reached this node in a world where this move was
+    /// legal. ISMCTS compares moves by availability, not by parent visits.
+    avail: u32,
 }
 
 struct Node {
@@ -88,47 +117,78 @@ impl Tree {
         }
     }
 
-    fn ensure_edges(&mut self, node: usize, state: &GameState, d: &Decision, eval: &dyn Evaluator) {
-        if self.nodes[node].edges.is_empty() {
-            self.nodes[node].player = d.player as u8;
-            let options = prior::restrict(state, d);
+    /// Bring `node`'s edges up to date with what this determinization allows,
+    /// and report which of them are legal right now.
+    ///
+    /// Newly-seen moves are appended rather than replacing what is there: the
+    /// node is an information set, so it accumulates the union of every move
+    /// any world has offered, while a single iteration only ever descends
+    /// through its own world's subset.
+    fn sync_edges(
+        &mut self,
+        node: usize,
+        state: &GameState,
+        d: &Decision,
+        eval: &dyn Evaluator,
+        legal_out: &mut Vec<usize>,
+    ) {
+        let options = prior::restrict(state, d);
+        self.nodes[node].player = d.player as u8;
+
+        let unseen = options
+            .iter()
+            .any(|mv| !self.nodes[node].edges.iter().any(|e| e.mv == *mv));
+        if unseen {
+            // Only pay for the evaluator when there is something new to price.
             let priors = eval.priors(state, d, &options);
-            self.nodes[node].edges = options
-                .iter()
-                .zip(priors)
-                .map(|(&mv, p)| Edge {
-                    mv,
-                    child: NO_CHILD,
-                    p,
-                })
-                .collect();
+            for (&mv, &p) in options.iter().zip(&priors) {
+                match self.nodes[node].edges.iter_mut().find(|e| e.mv == mv) {
+                    Some(e) => e.p = p,
+                    None => self.nodes[node].edges.push(Edge {
+                        mv,
+                        child: NO_CHILD,
+                        p,
+                        avail: 0,
+                    }),
+                }
+            }
+        }
+
+        legal_out.clear();
+        for (i, e) in self.nodes[node].edges.iter_mut().enumerate() {
+            if options.contains(&e.mv) {
+                e.avail += 1;
+                legal_out.push(i);
+            }
         }
     }
 
-    /// PUCT: `Q + c * P * sqrt(N_parent) / (1 + N_child)`.
+    /// PUCT over the moves this determinization makes legal:
+    /// `Q + c * P * sqrt(availability) / (1 + N_child)`.
     ///
     /// Unvisited edges are not forced to the front the way plain UCT does it —
     /// with a branching factor of 15 and a few hundred iterations, expanding
     /// every child once would spend the entire budget before learning
     /// anything. The prior decides what is worth a first look.
-    fn select(&self, node: usize, exploration: f32) -> usize {
+    fn select(&self, node: usize, legal: &[usize], exploration: f32) -> usize {
         let n = &self.nodes[node];
         let me = n.player as usize;
-        let sqrt_parent = (n.visits.max(1) as f32).sqrt();
         // First-play urgency: judge an unseen move by how the parent is doing,
         // rather than by an optimistic zero.
         let parent_q = n.sum[me] / n.visits.max(1) as f32;
 
-        let mut best = 0;
+        let mut best = legal[0];
         let mut best_score = f32::NEG_INFINITY;
-        for (i, e) in n.edges.iter().enumerate() {
+        for &i in legal {
+            let e = &n.edges[i];
             let (q, child_visits) = if e.child == NO_CHILD {
                 (parent_q, 0u32)
             } else {
                 let c = &self.nodes[e.child as usize];
                 (c.sum[me] / c.visits.max(1) as f32, c.visits)
             };
-            let u = exploration * e.p * sqrt_parent / (1.0 + child_visits as f32);
+            let u = exploration * e.p * (e.avail.max(1) as f32).sqrt()
+                / (1.0 + child_visits as f32);
             let score = q + u;
             if score > best_score {
                 best_score = score;
@@ -165,12 +225,24 @@ fn rollout(mut game: Game) -> [f32; MAX_PLAYERS] {
     out
 }
 
-/// One PUCT iteration in a fixed (fully known) world.
-fn iterate(tree: &mut Tree, root: &GameState, exploration: f32, eval: &dyn Evaluator) {
+/// One ISMCTS iteration: descend the shared tree inside one sampled world.
+///
+/// `scratch` and `path` are caller-owned so the hot loop does not allocate a
+/// fresh Vec per iteration — at a few thousand iterations per decision and tens
+/// of searched decisions per game, that adds up.
+fn iterate(
+    tree: &mut Tree,
+    root: &GameState,
+    exploration: f32,
+    eval: &dyn Evaluator,
+    path: &mut Vec<usize>,
+    scratch: &mut Vec<usize>,
+) {
     let mut game = Game {
         state: root.clone(),
     };
-    let mut path: Vec<usize> = vec![0];
+    path.clear();
+    path.push(0);
     let mut node = 0usize;
 
     loop {
@@ -178,9 +250,12 @@ fn iterate(tree: &mut Tree, root: &GameState, exploration: f32, eval: &dyn Evalu
             break;
         }
         let d = game.decision().expect("live game has a decision").clone();
-        tree.ensure_edges(node, &game.state, &d, eval);
+        tree.sync_edges(node, &game.state, &d, eval, scratch);
+        if scratch.is_empty() {
+            break;
+        }
 
-        let edge_idx = tree.select(node, exploration);
+        let edge_idx = tree.select(node, scratch, exploration);
         let edge = tree.nodes[node].edges[edge_idx];
         game.apply(edge.mv).expect("tree move is legal");
 
@@ -215,7 +290,7 @@ fn iterate(tree: &mut Tree, root: &GameState, exploration: f32, eval: &dyn Evalu
                 rollout(game)
             };
 
-            for &n in &path {
+            for &n in path.iter() {
                 let node = &mut tree.nodes[n];
                 node.visits += 1;
                 for p in 0..MAX_PLAYERS {
@@ -234,7 +309,7 @@ fn iterate(tree: &mut Tree, root: &GameState, exploration: f32, eval: &dyn Evalu
     for (i, r) in game.state.results().into_iter().enumerate() {
         result[i] = r;
     }
-    for &n in &path {
+    for &n in path.iter() {
         let node = &mut tree.nodes[n];
         node.visits += 1;
         for p in 0..MAX_PLAYERS {
@@ -284,20 +359,33 @@ pub fn search_with(
     }
     let mut totals: Vec<(Move, u32)> = options.iter().map(|&m| (m, 0)).collect();
 
-    for _ in 0..cfg.worlds {
+    // One tree, re-determinized every iteration. `worlds * iterations` keeps
+    // the same total budget the old per-world loop spent, but every sample now
+    // lands in the same statistics instead of being split across N trees.
+    let mut tree = Tree::new(d.player);
+    let mut path: Vec<usize> = Vec::with_capacity(64);
+    let mut scratch: Vec<usize> = Vec::with_capacity(32);
+    let budget = (cfg.worlds as u64 * cfg.iterations as u64).max(1);
+
+    for _ in 0..budget {
         let world = determinize(state, d.player, rng);
-        let mut tree = Tree::new(d.player);
-        for _ in 0..cfg.iterations {
-            iterate(&mut tree, &world, cfg.exploration, eval);
+        iterate(
+            &mut tree,
+            &world,
+            cfg.exploration,
+            eval,
+            &mut path,
+            &mut scratch,
+        );
+    }
+
+    for e in &tree.nodes[0].edges {
+        if e.child == NO_CHILD {
+            continue;
         }
-        for e in &tree.nodes[0].edges {
-            if e.child == NO_CHILD {
-                continue;
-            }
-            let visits = tree.nodes[e.child as usize].visits;
-            if let Some(slot) = totals.iter_mut().find(|(m, _)| *m == e.mv) {
-                slot.1 += visits;
-            }
+        let visits = tree.nodes[e.child as usize].visits;
+        if let Some(slot) = totals.iter_mut().find(|(m, _)| *m == e.mv) {
+            slot.1 += visits;
         }
     }
 
@@ -383,5 +471,144 @@ impl<'a> Agent for NetMctsAgent<'a> {
 
     fn name(&self) -> String {
         self.label.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::evaluator::HeuristicEvaluator;
+    use dominion_core::Game;
+
+    fn first_real_decision(seed: u64) -> (GameState, Decision) {
+        let kingdom = Game::random_kingdom(&mut Rng::new(seed));
+        let mut g = Game::new(&kingdom, 2, seed).unwrap();
+        // Walk to a buy decision with several affordable options, which is
+        // where determinizations actually differ deeper in the tree.
+        loop {
+            let d = g.decision().expect("live game").clone();
+            let buys = d
+                .options
+                .iter()
+                .filter(|m| matches!(m, Move::Buy(_)))
+                .count();
+            if d.ctx == dominion_core::Ctx::BuyPhase && buys > 3 {
+                return (g.state.clone(), d);
+            }
+            let mv = prior::restrict(&g.state, &d)[0];
+            g.apply(mv).unwrap();
+        }
+    }
+
+    /// The whole point of ISMCTS over independent-tree PIMC: every iteration
+    /// lands in one shared tree, so the root accumulates the *full* budget
+    /// rather than budget/worlds.
+    #[test]
+    fn the_root_accumulates_the_entire_budget() {
+        let (state, d) = first_real_decision(11);
+        let cfg = MctsConfig {
+            worlds: 4,
+            iterations: 50,
+            ..Default::default()
+        };
+        let mut rng = Rng::new(1);
+        let (_, visits) = search_with(&state, &d, &cfg, &HeuristicEvaluator, &mut rng);
+        let total: u32 = visits.iter().map(|(_, v)| v).sum();
+
+        // Every iteration that got past the root backs some root child. A
+        // handful terminate at the root itself, so allow slack below, but the
+        // total must be far above the 50 a single per-world tree would have
+        // given under the old scheme.
+        let budget = cfg.worlds * cfg.iterations;
+        assert!(
+            total > budget / 2,
+            "root saw {total} visits of a {budget} budget — statistics are not being shared"
+        );
+        assert!(total <= budget, "root cannot have more visits than iterations");
+    }
+
+    /// A node is an information set: it holds the union of moves seen under any
+    /// determinization, and availability is tracked per move.
+    #[test]
+    fn nodes_accumulate_moves_across_determinizations() {
+        let (state, d) = first_real_decision(7);
+        let mut rng = Rng::new(2);
+        let mut tree = Tree::new(d.player);
+        let mut path = Vec::new();
+        let mut scratch = Vec::new();
+
+        for _ in 0..300 {
+            let world = dominion_core::determinize(&state, d.player, &mut rng);
+            iterate(
+                &mut tree,
+                &world,
+                2.5,
+                &HeuristicEvaluator,
+                &mut path,
+                &mut scratch,
+            );
+        }
+
+        // The deciding player knows their own hand, so at the root every world
+        // offers the same moves and all of them should be universally available.
+        let root_avail: Vec<u32> = tree.nodes[0].edges.iter().map(|e| e.avail).collect();
+        assert!(!root_avail.is_empty());
+        assert!(
+            root_avail.iter().all(|&a| a == root_avail[0]),
+            "root moves should be equally available across worlds, got {root_avail:?}"
+        );
+
+        // Deeper nodes are reached under varying draws, so somewhere in the
+        // tree availability must differ between siblings — that is the
+        // information-set behaviour availability counts exist to handle.
+        let has_varying = tree.nodes.iter().skip(1).any(|n| {
+            n.edges.len() > 1 && n.edges.iter().any(|e| e.avail != n.edges[0].avail)
+        });
+        assert!(
+            has_varying,
+            "expected some deeper node to see different moves in different worlds"
+        );
+
+        // Priors stay a distribution over whatever the node has discovered.
+        for n in &tree.nodes {
+            for e in &n.edges {
+                assert!(e.p >= 0.0 && e.p <= 1.0, "prior out of range: {}", e.p);
+            }
+        }
+    }
+
+    /// Availability can never exceed the number of times the node was reached.
+    #[test]
+    fn availability_never_exceeds_node_visits() {
+        let (state, d) = first_real_decision(3);
+        let mut rng = Rng::new(5);
+        let mut tree = Tree::new(d.player);
+        let mut path = Vec::new();
+        let mut scratch = Vec::new();
+        for _ in 0..200 {
+            let world = dominion_core::determinize(&state, d.player, &mut rng);
+            iterate(
+                &mut tree,
+                &world,
+                2.5,
+                &HeuristicEvaluator,
+                &mut path,
+                &mut scratch,
+            );
+        }
+        for (i, n) in tree.nodes.iter().enumerate() {
+            for e in &n.edges {
+                // A node is visited once per iteration that reaches it, and a
+                // move can be available at most once per such iteration. The
+                // root is reached before its visit is recorded, so allow one.
+                assert!(
+                    e.avail <= n.visits + 1,
+                    "node {i}: move {} available {} times but node visited {}",
+                    e.mv,
+                    e.avail,
+                    n.visits
+                );
+            }
+        }
     }
 }
