@@ -5,7 +5,15 @@
 //! producer writes its own shard under a name nobody else will pick, and
 //! training reads however many shards happen to exist. No merge conflicts,
 //! no coordination beyond picking distinct file names.
+//!
+//! Shards are also written **incrementally**, and read back tolerantly: a run
+//! killed part-way through leaves a file whose final record may be half
+//! written, and losing an entire multi-hour shard to that would be absurd. The
+//! reader therefore stops at the first incomplete record and returns everything
+//! before it, so a shard is usable at any moment — including while it is still
+//! being appended to.
 
+use dominion_core::state::MOVE_SPACE;
 use dominion_core::Move;
 
 use crate::features::FEATURE_DIM;
@@ -101,6 +109,22 @@ fn parse_shard(bytes: &[u8]) -> Option<Vec<Example>> {
     };
     pos += 4;
 
+    let mut out = Vec::new();
+    while pos < bytes.len() {
+        // Parse one record from a cursor copy. A short read means the file was
+        // truncated mid-append — every earlier record is still perfectly good,
+        // so stop here rather than discarding the whole shard.
+        let mut cur = pos;
+        let Some(example) = read_record(bytes, &mut cur, v2) else {
+            break;
+        };
+        out.push(example);
+        pos = cur;
+    }
+    Some(out)
+}
+
+fn read_record(bytes: &[u8], pos: &mut usize, v2: bool) -> Option<Example> {
     let read_f32 = |bytes: &[u8], pos: &mut usize| -> Option<f32> {
         let c = bytes.get(*pos..*pos + 4)?;
         *pos += 4;
@@ -112,32 +136,33 @@ fn parse_shard(bytes: &[u8]) -> Option<Vec<Example>> {
         Some(u32::from_le_bytes(c.try_into().ok()?))
     };
 
-    let mut out = Vec::new();
-    while pos < bytes.len() {
-        let mut features = [0.0f32; FEATURE_DIM];
-        for f in &mut features {
-            *f = read_f32(bytes, &mut pos)?;
-        }
-        let n = read_u32(bytes, &mut pos)? as usize;
-        let mut policy = Vec::with_capacity(n);
-        for _ in 0..n {
-            let idx = read_u32(bytes, &mut pos)? as usize;
-            let p = read_f32(bytes, &mut pos)?;
-            let mv = Move::from_index(idx)?;
-            policy.push((mv, p));
-        }
-        let outcome = read_f32(bytes, &mut pos)?;
-        // v1 knew only the final outcome, so it is the best TD target it can
-        // offer; training on such a shard is simply pure Monte Carlo.
-        let td_target = if v2 { read_f32(bytes, &mut pos)? } else { outcome };
-        out.push(Example {
-            features,
-            policy,
-            outcome,
-            td_target,
-        });
+    let mut features = [0.0f32; FEATURE_DIM];
+    for f in &mut features {
+        *f = read_f32(bytes, pos)?;
     }
-    Some(out)
+    let n = read_u32(bytes, pos)? as usize;
+    // A truncated length field could decode as something enormous; refuse to
+    // preallocate on it.
+    if n > MOVE_SPACE {
+        return None;
+    }
+    let mut policy = Vec::with_capacity(n);
+    for _ in 0..n {
+        let idx = read_u32(bytes, pos)? as usize;
+        let p = read_f32(bytes, pos)?;
+        let mv = Move::from_index(idx)?;
+        policy.push((mv, p));
+    }
+    let outcome = read_f32(bytes, pos)?;
+    // v1 knew only the final outcome, so it is the best TD target it can
+    // offer; training on such a shard is simply pure Monte Carlo.
+    let td_target = if v2 { read_f32(bytes, pos)? } else { outcome };
+    Some(Example {
+        features,
+        policy,
+        outcome,
+        td_target,
+    })
 }
 
 #[cfg(test)]
@@ -185,6 +210,68 @@ mod tests {
     fn garbage_is_rejected_not_panicked_on() {
         assert!(parse_shard(&[9, 9, 9]).is_none());
         assert!(parse_shard(&[]).is_none());
+    }
+
+    /// A run killed mid-append leaves a half-written final record. Everything
+    /// before it must survive — losing hours of self-play to a truncated tail
+    /// would defeat the point of writing incrementally in the first place.
+    #[test]
+    fn a_truncated_tail_does_not_destroy_the_shard() {
+        let dir = std::env::temp_dir();
+        let path = dir
+            .join(format!("dominion-trunc-{}.bin", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = std::fs::remove_file(&path);
+
+        append_shard(&path, &[sample(1.0), sample(0.0), sample(0.5)]).unwrap();
+        let full = std::fs::read(&path).unwrap();
+        assert_eq!(parse_shard(&full).unwrap().len(), 3);
+
+        // Chop the file at every point inside the last record and check we
+        // always recover the two complete ones before it.
+        let record_len = (full.len() - 4) / 3;
+        for cut in 1..record_len {
+            let truncated = &full[..full.len() - cut];
+            let parsed = parse_shard(truncated)
+                .unwrap_or_else(|| panic!("truncating {cut} bytes lost the whole shard"));
+            assert_eq!(
+                parsed.len(),
+                2,
+                "truncating {cut} bytes should leave 2 intact records"
+            );
+            assert_eq!(parsed[0].outcome, 1.0);
+            assert_eq!(parsed[1].outcome, 0.0);
+        }
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// Appending in several batches, the way a live run does, must produce the
+    /// same file as one big write.
+    #[test]
+    fn incremental_appends_match_a_single_write() {
+        let dir = std::env::temp_dir();
+        let a = dir
+            .join(format!("dominion-inc-a-{}.bin", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let b = dir
+            .join(format!("dominion-inc-b-{}.bin", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+
+        let batch = vec![sample(1.0), sample(0.0), sample(0.25)];
+        append_shard(&a, &batch).unwrap();
+        for ex in &batch {
+            append_shard(&b, std::slice::from_ref(ex)).unwrap();
+        }
+        assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+
+        std::fs::remove_file(&a).unwrap();
+        std::fs::remove_file(&b).unwrap();
     }
 
     /// The 1500-game shard generated before TD targets existed must stay

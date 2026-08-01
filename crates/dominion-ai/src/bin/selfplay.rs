@@ -13,8 +13,18 @@
 //! measured in the README (60.4% vs the heuristic). With `--net`, it uses that
 //! network's policy and value instead — the loop that is supposed to make each
 //! generation stronger than the last.
+//!
+//! **Completed games are written to the shard as they finish**, not buffered
+//! until the end. A run of a few thousand games takes hours, and holding it all
+//! in memory meant any interruption — a crash, a reboot, or simply wanting to
+//! change the code — threw the whole thing away. With incremental writes the
+//! shard on disk is valid and usable at every moment, so stopping a run costs
+//! at most the handful of games in flight. Restarting after a code change needs
+//! no coordination either: the new run writes its own shard, and `train` reads
+//! every shard it finds.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use dominion_ai::evaluator::{HeuristicEvaluator, NetEvaluator};
@@ -87,6 +97,7 @@ fn main() {
         if net.is_some() { " (net-guided)" } else { " (heuristic-guided)" }
     );
     println!("TD(lambda) = {}", args.lambda);
+    println!("games are flushed as they finish; this run can be stopped at any time");
 
     let done = AtomicU32::new(0);
     // Threads used to take a fixed slice of the game range. That stalls the run
@@ -107,14 +118,21 @@ fn main() {
     let games = args.games;
     let start = Instant::now();
 
-    let shards: Vec<Vec<dominion_ai::Example>> = std::thread::scope(|scope| {
+    // Serializes appends so two threads never interleave a record, and so the
+    // magic header is written exactly once.
+    let writer = Mutex::new(());
+    let written = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
         let net = &net;
         let done = &done;
         let next = &next;
+        let writer = &writer;
+        let written = &written;
+        let out_path = &out_path;
         let handles: Vec<_> = (0..args.threads)
             .map(|_| {
                 scope.spawn(move || {
-                    let mut out = Vec::new();
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         if i >= games {
@@ -143,7 +161,17 @@ fn main() {
                                 args.lambda,
                             ),
                         };
-                        out.extend(examples);
+                        // Flush this game before touching the next one, so an
+                        // interrupted run keeps everything already finished.
+                        {
+                            let _guard = writer.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Err(e) = example::append_shard(out_path, &examples) {
+                                eprintln!("failed to append to {out_path}: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                        written.fetch_add(examples.len(), Ordering::Relaxed);
+
                         let n_done = done.fetch_add(1, Ordering::Relaxed) + 1;
                         if n_done % 10 == 0 || n_done == games {
                             let secs = start.elapsed().as_secs_f64();
@@ -153,24 +181,19 @@ fn main() {
                             );
                         }
                     }
-                    out
                 })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
-    });
-
-    let all: Vec<dominion_ai::Example> = shards.into_iter().flatten().collect();
-    example::append_shard(&out_path, &all).unwrap_or_else(|e| {
-        eprintln!("failed to write {out_path}: {e}");
-        std::process::exit(1);
+        for h in handles {
+            h.join().unwrap();
+        }
     });
 
     println!(
         "wrote {} examples from {} games to {out_path} in {:.1}s",
-        all.len(),
-        args.games,
+        written.load(Ordering::Relaxed),
+        done.load(Ordering::Relaxed),
         start.elapsed().as_secs_f64()
     );
-    println!("next: commit and push {out_path}, then run bin/train once shards from every machine are in.");
+    println!("next: run bin/train — it reads every shard in selfplay-data/.");
 }
