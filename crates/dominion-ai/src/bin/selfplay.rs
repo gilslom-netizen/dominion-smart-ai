@@ -89,23 +89,41 @@ fn main() {
     println!("TD(lambda) = {}", args.lambda);
 
     let done = AtomicU32::new(0);
+    // Threads used to take a fixed slice of the game range. That stalls the run
+    // whenever the slices differ in cost, and it degrades badly when the games
+    // do not divide evenly by threads: 13 games on 12 threads gives one thread
+    // two games and the rest one, doubling wall time. They now claim the next
+    // index from a shared counter.
+    //
+    // This was *not* measured as a throughput win: on a 12-thread 15W laptop
+    // parallel efficiency came out ~6.7 of 12 cores busy either way, because
+    // there the limit is the package power budget, not an idle tail. (Measured
+    // against the previous PIMC search, so the numbers predate ISMCTS; the
+    // power ceiling is a property of the machine, not of the search.) The
+    // concrete win is reproducibility: every RNG below is derived from the game
+    // index rather than the thread number, so a given `--seed` reproduces the
+    // same shard regardless of thread count or scheduling — not true before.
+    let next = AtomicU32::new(0);
     let games = args.games;
     let start = Instant::now();
 
     let shards: Vec<Vec<dominion_ai::Example>> = std::thread::scope(|scope| {
         let net = &net;
         let done = &done;
+        let next = &next;
         let handles: Vec<_> = (0..args.threads)
-            .map(|t| {
-                let lo = (games as usize * t / args.threads) as u32;
-                let hi = (games as usize * (t + 1) / args.threads) as u32;
+            .map(|_| {
                 scope.spawn(move || {
-                    let mut rng = Rng::new(args.seed ^ (t as u64).wrapping_mul(0x9E3779B97F4A7C15));
                     let mut out = Vec::new();
-                    for i in lo..hi {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        if i >= games {
+                            break;
+                        }
                         let game_seed = args.seed
                             .wrapping_mul(0x2545F4914F6CDD1D)
                             .wrapping_add(i as u64);
+                        let mut rng = Rng::new(game_seed ^ 0x9E3779B97F4A7C15);
                         let mut krng = Rng::new(game_seed ^ 0xABCD);
                         let kingdom = Game::random_kingdom(&mut krng);
                         let examples = match &net {
