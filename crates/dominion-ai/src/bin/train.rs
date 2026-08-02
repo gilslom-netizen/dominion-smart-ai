@@ -34,10 +34,17 @@ fn main() {
     // TD targets are the default; --mc trains the value head on the raw final
     // outcome instead, so the two can be compared on identical data.
     let use_td = !std::env::args().any(|a| a == "--mc");
+    // Which directory to read. Controlled experiments need to train on one
+    // specific corpus rather than on everything that happens to be lying
+    // around — the difference between a comparison and a coincidence.
+    let data_dir = parse_flag("--data").unwrap_or_else(|| "selfplay-data".into());
+    // Cap on examples used, so two corpora of different sizes can be compared
+    // at a matched number of gradient steps rather than matched epochs.
+    let limit: Option<usize> = parse_flag("--limit").and_then(|s| s.parse().ok());
 
     let mut shard_paths: Vec<String> = Vec::new();
     let mut gamelog_paths: Vec<String> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir("selfplay-data") {
+    if let Ok(rd) = std::fs::read_dir(&data_dir) {
         for entry in rd.filter_map(|e| e.ok()) {
             let path = entry.path();
             let name = path.to_string_lossy().into_owned();
@@ -52,7 +59,7 @@ fn main() {
     gamelog_paths.sort();
 
     if shard_paths.is_empty() && gamelog_paths.is_empty() {
-        eprintln!("nothing in selfplay-data/ — run bin/selfplay first");
+        eprintln!("nothing in {data_dir}/ — run bin/selfplay first");
         std::process::exit(1);
     }
 
@@ -75,6 +82,16 @@ fn main() {
         });
         println!("  {p}: {} examples", got.len());
         examples.extend(got);
+    }
+    if let Some(n) = limit {
+        if examples.len() > n {
+            // Shuffle before truncating: taking a prefix would take whole
+            // games in generation order, not a sample of positions.
+            let mut r = Rng::new(0xC0FFEE);
+            r.shuffle(&mut examples);
+            examples.truncate(n);
+            println!("limited to {n} examples");
+        }
     }
     // Single-option positions train the value head but not the policy head
     // (see Net::train_step). They are kept: dropping them cost 61.7% of the
