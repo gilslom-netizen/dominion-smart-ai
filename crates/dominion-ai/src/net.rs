@@ -19,8 +19,11 @@ use dominion_core::Rng;
 
 use crate::features::FEATURE_DIM;
 
-const HIDDEN1: usize = 128;
-const HIDDEN2: usize = 64;
+/// Default hidden widths. These are only defaults: a [`Net`] carries its own
+/// widths, and a weights file records them, so networks of different sizes
+/// coexist and older checkpoints keep loading after the default changes.
+pub const DEFAULT_HIDDEN1: usize = 128;
+pub const DEFAULT_HIDDEN2: usize = 64;
 
 fn rand_f32(rng: &mut Rng, scale: f32) -> f32 {
     // next_u64's top 24 bits give plenty of mantissa for an f32 in [-scale, scale).
@@ -155,13 +158,32 @@ pub struct Net {
 }
 
 impl Net {
+    /// A network at the default width.
     pub fn new(rng: &mut Rng) -> Self {
+        Net::with_hidden(DEFAULT_HIDDEN1, DEFAULT_HIDDEN2, rng)
+    }
+
+    /// A network at an explicit width, for capacity experiments.
+    pub fn with_hidden(h1: usize, h2: usize, rng: &mut Rng) -> Self {
         Net {
-            trunk1: Layer::new(FEATURE_DIM, HIDDEN1, rng),
-            trunk2: Layer::new(HIDDEN1, HIDDEN2, rng),
-            policy_head: Layer::new(HIDDEN2, MOVE_SPACE, rng),
-            value_head: Layer::new(HIDDEN2, 1, rng),
+            trunk1: Layer::new(FEATURE_DIM, h1, rng),
+            trunk2: Layer::new(h1, h2, rng),
+            policy_head: Layer::new(h2, MOVE_SPACE, rng),
+            value_head: Layer::new(h2, 1, rng),
         }
+    }
+
+    /// `(hidden1, hidden2)` for this network.
+    pub fn hidden(&self) -> (usize, usize) {
+        (self.trunk1.out_dim, self.trunk2.out_dim)
+    }
+
+    /// Total learnable parameters, the honest measure of capacity.
+    pub fn parameters(&self) -> usize {
+        [&self.trunk1, &self.trunk2, &self.policy_head, &self.value_head]
+            .iter()
+            .map(|l| l.w.len() + l.b.len())
+            .sum()
     }
 
     fn forward(&self, x: &[f32; FEATURE_DIM]) -> Forward {
@@ -248,11 +270,12 @@ impl Net {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
+        let (h1, h2) = self.hidden();
         let mut out = Vec::new();
         for dim in [
             FEATURE_DIM as u32,
-            HIDDEN1 as u32,
-            HIDDEN2 as u32,
+            h1 as u32,
+            h2 as u32,
             MOVE_SPACE as u32,
         ] {
             out.extend_from_slice(&dim.to_le_bytes());
@@ -271,27 +294,26 @@ impl Net {
             Some(u32::from_le_bytes(chunk.try_into().ok()?))
         };
         let mut pos = 0;
-        let dims = [
-            read_u32(bytes, &mut pos)?,
-            read_u32(bytes, &mut pos)?,
-            read_u32(bytes, &mut pos)?,
-            read_u32(bytes, &mut pos)?,
-        ];
-        if dims
-            != [
-                FEATURE_DIM as u32,
-                HIDDEN1 as u32,
-                HIDDEN2 as u32,
-                MOVE_SPACE as u32,
-            ]
-        {
-            return None; // a weights file from a different architecture
+        let feature_dim = read_u32(bytes, &mut pos)? as usize;
+        let h1 = read_u32(bytes, &mut pos)? as usize;
+        let h2 = read_u32(bytes, &mut pos)? as usize;
+        let move_space = read_u32(bytes, &mut pos)? as usize;
+
+        // The hidden widths are whatever the file says, so checkpoints of
+        // different sizes all load. The input and output widths are fixed by
+        // the game encoding, so a mismatch there really is a foreign file.
+        if feature_dim != FEATURE_DIM || move_space != MOVE_SPACE {
+            return None;
+        }
+        // Guard against a corrupt header driving an enormous allocation.
+        if h1 == 0 || h2 == 0 || h1 > 65536 || h2 > 65536 {
+            return None;
         }
         Some(Net {
-            trunk1: Layer::read(FEATURE_DIM, HIDDEN1, bytes, &mut pos)?,
-            trunk2: Layer::read(HIDDEN1, HIDDEN2, bytes, &mut pos)?,
-            policy_head: Layer::read(HIDDEN2, MOVE_SPACE, bytes, &mut pos)?,
-            value_head: Layer::read(HIDDEN2, 1, bytes, &mut pos)?,
+            trunk1: Layer::read(FEATURE_DIM, h1, bytes, &mut pos)?,
+            trunk2: Layer::read(h1, h2, bytes, &mut pos)?,
+            policy_head: Layer::read(h2, MOVE_SPACE, bytes, &mut pos)?,
+            value_head: Layer::read(h2, 1, bytes, &mut pos)?,
         })
     }
 
@@ -305,6 +327,8 @@ impl Net {
     /// approximates one large-batch update over all the slices — which is the
     /// point of letting several machines generate self-play at once.
     ///
+    /// Inputs must also share a width; mixing sizes returns `None`.
+    ///
     /// Averaging networks trained from *different* random initialisations is a
     /// different and much worse proposition: hidden units are only meaningful
     /// relative to their own network, so unit 7 of one has nothing to do with
@@ -317,6 +341,9 @@ impl Net {
             return None;
         }
 
+        if nets.iter().any(|(n, _)| n.hidden() != first.hidden()) {
+            return None;
+        }
         let mut out = first.clone();
         for layer in [
             LayerId::Trunk1,
@@ -478,6 +505,51 @@ mod tests {
     #[test]
     fn a_foreign_byte_blob_is_rejected_not_panicked_on() {
         assert!(Net::from_bytes(&[1, 2, 3]).is_none());
+    }
+
+    /// Widths live in the file, so a checkpoint saved at one size still loads
+    /// after the default changes. Without this, raising the default would
+    /// silently strand every network already trained and pushed.
+    #[test]
+    fn checkpoints_of_any_width_round_trip() {
+        for (h1, h2) in [(128usize, 64usize), (512, 256), (32, 16)] {
+            let mut rng = Rng::new(h1 as u64);
+            let net = Net::with_hidden(h1, h2, &mut rng);
+            assert_eq!(net.hidden(), (h1, h2));
+
+            let back = Net::from_bytes(&net.to_bytes()).expect("round trips");
+            assert_eq!(back.hidden(), (h1, h2));
+
+            let mut probe = zeros();
+            probe[7] = 0.5;
+            assert_eq!(net.value(&probe), back.value(&probe));
+        }
+    }
+
+    #[test]
+    fn a_wider_network_really_has_more_capacity() {
+        let mut rng = Rng::new(1);
+        let small = Net::with_hidden(128, 64, &mut rng);
+        let big = Net::with_hidden(512, 256, &mut rng);
+        // 32,741 against 228,965 - about 7x. Most of the growth is the h1 x h2
+        // matrix, so widening the second layer buys capacity faster than
+        // widening the first.
+        assert!(
+            big.parameters() > 5 * small.parameters(),
+            "{} vs {}",
+            big.parameters(),
+            small.parameters()
+        );
+        assert_eq!(small.parameters(), 32_741);
+        assert_eq!(big.parameters(), 228_965);
+    }
+
+    #[test]
+    fn merging_different_widths_is_refused() {
+        let mut rng = Rng::new(2);
+        let a = Net::with_hidden(128, 64, &mut rng);
+        let b = Net::with_hidden(512, 256, &mut rng);
+        assert!(Net::weighted_average(&[(a, 1.0), (b, 1.0)]).is_none());
     }
 
     /// Averaging is elementwise on every parameter, so a probe input should
