@@ -95,13 +95,23 @@ fn main() {
 
     let mut examples = Vec::new();
     // Compact game logs, expanded by replaying each game. These are the ones
-    // that travel between machines.
-    for p in &gamelog_paths {
-        let got = compact::read_examples(p).unwrap_or_else(|e| {
-            eprintln!("failed to read {p}: {e}");
+    // that travel between machines, so they are deduplicated by game identity:
+    // two machines that generated the same game must not have it counted twice.
+    if !gamelog_paths.is_empty() {
+        let (got, dupes) = compact::read_examples_deduped(&gamelog_paths).unwrap_or_else(|e| {
+            eprintln!("failed to read game logs: {e}");
             std::process::exit(1);
         });
-        println!("  {p}: {} examples (replayed)", got.len());
+        println!(
+            "  {} game log(s): {} examples (replayed)",
+            gamelog_paths.len(),
+            got.len()
+        );
+        if dupes > 0 {
+            println!(
+                "  skipped {dupes} duplicate games — same kingdom and seed as one already read"
+            );
+        }
         examples.extend(got);
     }
     // Legacy expanded shards, kept readable so earlier data is not stranded.

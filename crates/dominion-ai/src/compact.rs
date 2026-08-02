@@ -324,6 +324,38 @@ pub fn read_examples(path: &str) -> Result<Vec<Example>, CompactError> {
     Ok(out)
 }
 
+/// A game's identity: kingdom plus seed determine it completely, so two
+/// records sharing both are the same game however they were produced.
+pub fn game_id(g: &GameRecord) -> (u64, Vec<u8>) {
+    (g.seed, g.kingdom.iter().map(|c| *c as u8).collect())
+}
+
+/// Expand several files into one training set, dropping games already seen.
+///
+/// Pooling self-play across machines only pays if the machines generated
+/// *different* games. They did not, once: `--seed` defaulted to 0, so two
+/// agents running the same command produced identical corpora, and training on
+/// both would have weighted those games twice for no gain. The seed now derives
+/// from the tag, but deduplicating here means a repeat of that mistake — or
+/// simply two runs sharing a tag — costs nothing beyond the wasted CPU.
+///
+/// Returns the examples and how many duplicate games were skipped.
+pub fn read_examples_deduped(paths: &[String]) -> Result<(Vec<Example>, usize), CompactError> {
+    let mut seen: std::collections::HashSet<(u64, Vec<u8>)> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    for path in paths {
+        for (i, g) in read_games(path)?.iter().enumerate() {
+            if !seen.insert(game_id(g)) {
+                skipped += 1;
+                continue;
+            }
+            out.extend(expand_game(g, i)?);
+        }
+    }
+    Ok((out, skipped))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
