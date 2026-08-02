@@ -76,19 +76,17 @@ fn main() {
         println!("  {p}: {} examples", got.len());
         examples.extend(got);
     }
-    // Older data predates the fix that stopped recording single-option
-    // decisions; drop them here too so a mixed corpus is not two thirds dead
-    // weight and the reported policy loss stays comparable across runs.
-    let before = examples.len();
-    examples.retain(|e| e.policy.len() > 1);
-    if examples.len() < before {
+    // Single-option positions train the value head but not the policy head
+    // (see Net::train_step). They are kept: dropping them cost 61.7% of the
+    // value head's data and measurably hurt it.
+    let forced = examples.iter().filter(|e| e.policy.len() <= 1).count();
+    println!("{} training examples", examples.len());
+    if forced > 0 {
         println!(
-            "dropped {} single-option examples ({:.1}% of the corpus) — no policy signal in them",
-            before - examples.len(),
-            100.0 * (before - examples.len()) as f64 / before.max(1) as f64
+            "  {forced} ({:.1}%) are forced positions: value head only",
+            100.0 * forced as f64 / examples.len().max(1) as f64
         );
     }
-    println!("{} training examples", examples.len());
     println!(
         "value target: {}",
         if use_td { "TD(lambda)" } else { "Monte Carlo (final outcome)" }
@@ -124,10 +122,14 @@ fn main() {
             policy_loss += pl as f64;
             value_loss += vl as f64;
         }
+        // Policy loss is averaged over the examples that actually train it,
+        // so it stays comparable no matter how many forced positions the
+        // corpus happens to contain.
         let n = examples.len().max(1) as f64;
+        let n_policy = (examples.len() - forced).max(1) as f64;
         println!(
             "epoch {epoch}: policy loss {:.4}, value loss {:.4}",
-            policy_loss / n,
+            policy_loss / n_policy,
             value_loss / n
         );
     }

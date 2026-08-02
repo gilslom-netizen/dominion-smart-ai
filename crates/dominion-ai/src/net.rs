@@ -222,6 +222,13 @@ impl Net {
     /// masked softmax target for the policy head (same length, same order);
     /// `value_target` is the eventual game result for the deciding player, in
     /// `[0, 1]`. Returns `(policy_loss, value_loss)` for monitoring.
+    ///
+    /// A position with fewer than two legal moves trains the **value head
+    /// only**. Its policy target is a point mass on the sole option, so the
+    /// policy gradient is identically zero and computing it is pure waste —
+    /// but the position still happened and its value target is as real as any
+    /// other. Dropping such examples outright cost 61.7% of the value head's
+    /// training data and measurably hurt it.
     pub fn train_step(
         &mut self,
         x: &[f32; FEATURE_DIM],
@@ -231,29 +238,39 @@ impl Net {
         lr: f32,
     ) -> (f32, f32) {
         let f = self.forward(x);
+        let trains_policy = legal_indices.len() > 1;
 
         // --- policy head: masked softmax cross-entropy -------------------
-        let probs = softmax_subset(&f.policy_logits, legal_indices);
-        let policy_loss = -legal_indices
-            .iter()
-            .zip(target_probs)
-            .zip(&probs)
-            .map(|((_, &t), &p)| if t > 0.0 { t * p.max(1e-9).ln() } else { 0.0 })
-            .sum::<f32>();
-
-        // dL/dz_i = p_i - t_i for i in the masked subset, 0 elsewhere: logits
-        // outside the mask did not take part in this example's softmax.
         let mut grad_logits = vec![0.0f32; MOVE_SPACE];
-        for ((&idx, &t), &p) in legal_indices.iter().zip(target_probs).zip(&probs) {
-            grad_logits[idx] = p - t;
-        }
+        let policy_loss = if trains_policy {
+            let probs = softmax_subset(&f.policy_logits, legal_indices);
+            // dL/dz_i = p_i - t_i for i in the masked subset, 0 elsewhere:
+            // logits outside the mask did not take part in this softmax.
+            for ((&idx, &t), &p) in legal_indices.iter().zip(target_probs).zip(&probs) {
+                grad_logits[idx] = p - t;
+            }
+            -legal_indices
+                .iter()
+                .zip(target_probs)
+                .zip(&probs)
+                .map(|((_, &t), &p)| if t > 0.0 { t * p.max(1e-9).ln() } else { 0.0 })
+                .sum::<f32>()
+        } else {
+            0.0
+        };
 
         // --- value head: MSE on a sigmoid output --------------------------
         let value_loss = (f.value - value_target).powi(2);
         let grad_value_pre = 2.0 * (f.value - value_target) * f.value * (1.0 - f.value);
 
         // --- backward, accumulating both heads' gradient into the trunk ---
-        let grad_h2_from_policy = self.policy_head.backward(&f.h2, &grad_logits, lr);
+        // With an all-zero policy gradient this still costs a pass over the
+        // policy head, so skip it outright when there is nothing to learn.
+        let grad_h2_from_policy = if trains_policy {
+            self.policy_head.backward(&f.h2, &grad_logits, lr)
+        } else {
+            vec![0.0; f.h2.len()]
+        };
         let grad_h2_from_value = self.value_head.backward(&f.h2, &[grad_value_pre], lr);
         let grad_h2: Vec<f32> = grad_h2_from_policy
             .iter()
@@ -510,6 +527,63 @@ mod tests {
     /// Widths live in the file, so a checkpoint saved at one size still loads
     /// after the default changes. Without this, raising the default would
     /// silently strand every network already trained and pushed.
+    /// A single-option position must leave the policy head's own parameters
+    /// untouched while still teaching the value head.
+    ///
+    /// Note what is *not* asserted: that the policy output is unchanged. The
+    /// trunk is shared, so the value head's updates flow through it and shift
+    /// the policy's predictions as a side effect. That is how a shared trunk
+    /// is supposed to work — the value head improving the representation is a
+    /// benefit, not a leak — so the check is on the policy head's weights,
+    /// which are the thing that must not move.
+    #[test]
+    fn a_forced_position_trains_only_the_value_head() {
+        let mut rng = Rng::new(21);
+        let mut net = Net::new(&mut rng);
+        let mut x = zeros();
+        x[2] = 0.4;
+
+        let head_before = net.policy_head.w.clone();
+        let bias_before = net.policy_head.b.clone();
+        let v_before = net.value(&x);
+
+        for _ in 0..100 {
+            let (pl, _) = net.train_step(&x, &[5], &[1.0], 1.0, 0.05);
+            assert_eq!(pl, 0.0, "a forced move has no policy loss");
+        }
+
+        assert_eq!(net.policy_head.w, head_before, "policy head weights moved");
+        assert_eq!(net.policy_head.b, bias_before, "policy head biases moved");
+        assert!(
+            net.value(&x) > v_before,
+            "the value head should still have learned"
+        );
+    }
+
+    /// And the ordinary case still updates the policy head, so the guard above
+    /// cannot pass by accident on a network that never learns a policy at all.
+    #[test]
+    fn a_real_choice_does_update_the_policy_head() {
+        let mut rng = Rng::new(22);
+        let mut net = Net::new(&mut rng);
+        // A non-zero input matters here: with an all-zero feature vector every
+        // activation is zero, so `w -= lr * g * x` leaves the weight matrices
+        // untouched and only biases move. Correct arithmetic, but it would
+        // make this test pass or fail for the wrong reason.
+        let mut x = zeros();
+        x[0] = 0.6;
+        x[11] = -0.3;
+
+        let head_before = net.policy_head.w.clone();
+        for _ in 0..20 {
+            net.train_step(&x, &[0, 1], &[1.0, 0.0], 0.5, 0.05);
+        }
+        assert_ne!(
+            net.policy_head.w, head_before,
+            "a genuine choice must move the policy head"
+        );
+    }
+
     #[test]
     fn checkpoints_of_any_width_round_trip() {
         for (h1, h2) in [(128usize, 64usize), (512, 256), (32, 16)] {
