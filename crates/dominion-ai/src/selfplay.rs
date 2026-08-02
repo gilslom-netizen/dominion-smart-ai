@@ -124,20 +124,24 @@ pub fn play_selfplay_game_with_lambda(
             game.apply(mv).unwrap();
         } else {
             let outcome = search_full(&game.state, &d, cfg, eval, rng);
-            let total: u32 = outcome.visits.iter().map(|(_, v)| v).sum::<u32>().max(1);
-            let policy_target: Vec<(Move, f32)> = outcome
-                .visits
-                .iter()
-                .map(|&(mv, v)| (mv, v as f32 / total as f32))
-                .collect();
+            // See play_selfplay_game_recorded: single-option decisions carry no
+            // policy signal and are not worth an example.
+            if outcome.visits.len() > 1 {
+                let total: u32 = outcome.visits.iter().map(|(_, v)| v).sum::<u32>().max(1);
+                let policy_target: Vec<(Move, f32)> = outcome
+                    .visits
+                    .iter()
+                    .map(|&(mv, v)| (mv, v as f32 / total as f32))
+                    .collect();
 
-            let x = features::encode(&game.state, d.player, &d);
-            pending.push(Step {
-                player: d.player,
-                features: x,
-                policy: policy_target,
-                search_value: outcome.value,
-            });
+                let x = features::encode(&game.state, d.player, &d);
+                pending.push(Step {
+                    player: d.player,
+                    features: x,
+                    policy: policy_target,
+                    search_value: outcome.value,
+                });
+            }
 
             let temp = temperature(game.state.players[d.player].turns);
             let mv = sample_by_visits(rng, &outcome.visits, temp);
@@ -203,17 +207,24 @@ pub fn play_selfplay_game_recorded(
             if d.options.contains(&m) { m } else { d.options[0] }
         } else {
             let outcome = search_full(&game.state, &d, cfg, eval, rng);
-            let total: u32 = outcome.visits.iter().map(|(_, v)| v).sum::<u32>().max(1);
-            pending.push(Step {
-                player: d.player,
-                ply,
-                policy: outcome
-                    .visits
-                    .iter()
-                    .map(|&(mv, v)| (mv, v as f32 / total as f32))
-                    .collect(),
-                search_value: outcome.value,
-            });
+            // A decision the restriction collapsed to a single move carries no
+            // information: its target is "the one legal move, probability 1",
+            // and cross-entropy against that is zero however the network is
+            // wired. Recording them made up 61.7% of the training set and cost
+            // that share of every epoch while teaching nothing.
+            if outcome.visits.len() > 1 {
+                let total: u32 = outcome.visits.iter().map(|(_, v)| v).sum::<u32>().max(1);
+                pending.push(Step {
+                    player: d.player,
+                    ply,
+                    policy: outcome
+                        .visits
+                        .iter()
+                        .map(|&(mv, v)| (mv, v as f32 / total as f32))
+                        .collect(),
+                    search_value: outcome.value,
+                });
+            }
             let temp = temperature(game.state.players[d.player].turns);
             sample_by_visits(rng, &outcome.visits, temp)
         };
@@ -346,6 +357,43 @@ mod tests {
         // Step 0 (player 0): next is player 1 with V=0.90, G=0.225, flipped
         // 0.10 and 0.775 -> 0.5*0.10 + 0.5*0.775 = 0.4375.
         assert!((g[0] - 0.4375).abs() < 1e-6, "got {}", g[0]);
+    }
+
+    /// Decisions with only one move left after restriction teach the policy
+    /// head nothing — their target is a point mass on the only option. They
+    /// were 61.7% of the training set before this was fixed, so every epoch
+    /// spent nearly two thirds of its time on them for no gain.
+    #[test]
+    fn information_free_decisions_are_not_recorded() {
+        let cfg = MctsConfig {
+            worlds: 1,
+            iterations: 15,
+            ..Default::default()
+        };
+        let kingdom = Game::random_kingdom(&mut Rng::new(12));
+        let mut rng = Rng::new(31);
+        let examples = play_selfplay_game_with_lambda(
+            &kingdom, 2, 40, &cfg, &HeuristicEvaluator, &mut rng, 0.9,
+        );
+        assert!(!examples.is_empty());
+        for ex in &examples {
+            assert!(
+                ex.policy.len() > 1,
+                "recorded a decision with {} option(s)",
+                ex.policy.len()
+            );
+        }
+
+        // Same for the compact recorder, which is what actually ships data.
+        let mut rng = Rng::new(31);
+        let record = play_selfplay_game_recorded(
+            &kingdom, 2, 40, &cfg, &HeuristicEvaluator, &mut rng, 0.9,
+        );
+        assert!(!record.decisions.is_empty());
+        for d in &record.decisions {
+            assert!(d.policy.len() > 1);
+        }
+        assert_eq!(record.decisions.len(), examples.len());
     }
 
     #[test]

@@ -76,6 +76,18 @@ fn main() {
         println!("  {p}: {} examples", got.len());
         examples.extend(got);
     }
+    // Older data predates the fix that stopped recording single-option
+    // decisions; drop them here too so a mixed corpus is not two thirds dead
+    // weight and the reported policy loss stays comparable across runs.
+    let before = examples.len();
+    examples.retain(|e| e.policy.len() > 1);
+    if examples.len() < before {
+        println!(
+            "dropped {} single-option examples ({:.1}% of the corpus) — no policy signal in them",
+            before - examples.len(),
+            100.0 * (before - examples.len()) as f64 / before.max(1) as f64
+        );
+    }
     println!("{} training examples", examples.len());
     println!(
         "value target: {}",
