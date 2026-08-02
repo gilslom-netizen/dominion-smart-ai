@@ -165,6 +165,11 @@ fn main() {
 
     // How good is it? Cheap, fast diagnostic: the network's own raw priors and
     // value used to drive a light search, measured against the heuristic.
+    // Skipped at --eval-games 0, which is how a controlled experiment asks for
+    // a trained network without paying for a measurement it will not use.
+    if eval_games == 0 {
+        return;
+    }
     println!("\nevaluating: NetMCTS vs Heuristic ({} games)...", eval_games * 2);
     let cfg = MctsConfig {
         worlds: 4,
