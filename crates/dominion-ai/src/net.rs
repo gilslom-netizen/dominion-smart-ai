@@ -111,6 +111,14 @@ impl Layer {
     }
 }
 
+#[derive(Clone, Copy)]
+enum LayerId {
+    Trunk1,
+    Trunk2,
+    Policy,
+    Value,
+}
+
 fn relu(x: &[f32]) -> Vec<f32> {
     x.iter().map(|&v| v.max(0.0)).collect()
 }
@@ -287,6 +295,79 @@ impl Net {
         })
     }
 
+    /// Average several networks into one, weighted by how much data each was
+    /// trained on.
+    ///
+    /// This is federated averaging, and it is only meaningful under one
+    /// condition: every input must have been fine-tuned from the *same*
+    /// starting checkpoint. Then each is that checkpoint plus a gradient
+    /// update computed on its own slice of data, and averaging them
+    /// approximates one large-batch update over all the slices — which is the
+    /// point of letting several machines generate self-play at once.
+    ///
+    /// Averaging networks trained from *different* random initialisations is a
+    /// different and much worse proposition: hidden units are only meaningful
+    /// relative to their own network, so unit 7 of one has nothing to do with
+    /// unit 7 of another and averaging them destroys both. The caller is
+    /// responsible for that precondition; nothing here can check it.
+    pub fn weighted_average(nets: &[(Net, f32)]) -> Option<Net> {
+        let (first, _) = nets.first()?;
+        let total: f32 = nets.iter().map(|(_, w)| w).sum();
+        if total <= 0.0 {
+            return None;
+        }
+
+        let mut out = first.clone();
+        for layer in [
+            LayerId::Trunk1,
+            LayerId::Trunk2,
+            LayerId::Policy,
+            LayerId::Value,
+        ] {
+            let (w_len, b_len) = {
+                let l = out.layer(layer);
+                (l.w.len(), l.b.len())
+            };
+            let mut w_acc = vec![0.0f32; w_len];
+            let mut b_acc = vec![0.0f32; b_len];
+            for (net, weight) in nets {
+                let l = net.layer(layer);
+                if l.w.len() != w_len || l.b.len() != b_len {
+                    return None; // mismatched architecture
+                }
+                let share = weight / total;
+                for (acc, v) in w_acc.iter_mut().zip(&l.w) {
+                    *acc += share * v;
+                }
+                for (acc, v) in b_acc.iter_mut().zip(&l.b) {
+                    *acc += share * v;
+                }
+            }
+            let l = out.layer_mut(layer);
+            l.w = w_acc;
+            l.b = b_acc;
+        }
+        Some(out)
+    }
+
+    fn layer(&self, id: LayerId) -> &Layer {
+        match id {
+            LayerId::Trunk1 => &self.trunk1,
+            LayerId::Trunk2 => &self.trunk2,
+            LayerId::Policy => &self.policy_head,
+            LayerId::Value => &self.value_head,
+        }
+    }
+
+    fn layer_mut(&mut self, id: LayerId) -> &mut Layer {
+        match id {
+            LayerId::Trunk1 => &mut self.trunk1,
+            LayerId::Trunk2 => &mut self.trunk2,
+            LayerId::Policy => &mut self.policy_head,
+            LayerId::Value => &mut self.value_head,
+        }
+    }
+
     pub fn save(&self, path: &str) -> std::io::Result<()> {
         std::fs::write(path, self.to_bytes())
     }
@@ -397,5 +478,47 @@ mod tests {
     #[test]
     fn a_foreign_byte_blob_is_rejected_not_panicked_on() {
         assert!(Net::from_bytes(&[1, 2, 3]).is_none());
+    }
+
+    /// Averaging is elementwise on every parameter, so a probe input should
+    /// land between what the inputs predict, and equal weights should give the
+    /// exact midpoint.
+    #[test]
+    fn averaging_blends_the_inputs() {
+        let mut rng = Rng::new(10);
+        let base = Net::new(&mut rng);
+
+        // Two divergent fine-tunes of one shared checkpoint — the situation
+        // weighted_average is actually for.
+        let mut a = base.clone();
+        let mut b = base.clone();
+        let x = zeros();
+        for _ in 0..200 {
+            a.train_step(&x, &[0, 1], &[1.0, 0.0], 1.0, 0.05);
+            b.train_step(&x, &[0, 1], &[0.0, 1.0], 0.0, 0.05);
+        }
+
+        let va = a.value(&x);
+        let vb = b.value(&x);
+        assert!(va > vb, "the two fine-tunes should disagree: {va} vs {vb}");
+
+        let avg = Net::weighted_average(&[(a.clone(), 1.0), (b.clone(), 1.0)]).unwrap();
+        let vavg = avg.value(&x);
+        assert!(
+            vavg > vb && vavg < va,
+            "average {vavg} should sit between {vb} and {va}"
+        );
+
+        // Weighting all the way to one side reproduces that side exactly.
+        let just_a = Net::weighted_average(&[(a.clone(), 1.0), (b.clone(), 0.0)]).unwrap();
+        assert!((just_a.value(&x) - va).abs() < 1e-5);
+    }
+
+    #[test]
+    fn averaging_rejects_degenerate_input() {
+        let mut rng = Rng::new(11);
+        let n = Net::new(&mut rng);
+        assert!(Net::weighted_average(&[]).is_none());
+        assert!(Net::weighted_average(&[(n, 0.0)]).is_none());
     }
 }
