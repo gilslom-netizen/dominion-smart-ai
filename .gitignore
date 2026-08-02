@@ -5,9 +5,15 @@
 /data
 __pycache__/
 
-# Raw self-play shards are hundreds of MB for a real run (3000 games ~ 427MB)
-# and GitHub hard-rejects files over 100MB. Train locally right after
-# generating, share only the trained weights (models/*.bin, tens of KB).
-# The glob covers the staging directories used to hold shards out of an
-# experiment without deleting them.
-selfplay-data*/
+# Expanded .shard files are hundreds of MB for a real run (3000 games ~ 427MB)
+# and GitHub hard-rejects anything over 100MB, so they never get committed.
+# The glob also covers the staging directories used to hold a corpus out of an
+# experiment without deleting it.
+selfplay-data*/**/*.shard
+selfplay-data*/**/*.bin
+
+# Compact .gamelog files are the opposite case: ~23MB per 3000 games, which is
+# the whole point of that format — several machines pooling their self-play
+# through the repository. They are deliberately NOT ignored.
+!selfplay-data/
+!selfplay-data/*.gamelog
