@@ -25,7 +25,37 @@ fn parse_flag(flag: &str) -> Option<String> {
         .cloned()
 }
 
+const USAGE: &str = "\
+train the policy/value network on self-play data
+
+usage: train [options]
+
+  --data <dir>       corpus to read (default selfplay-data)
+  --net-in <path>    start from this checkpoint instead of random init
+  --net-out <path>   where to save (default models/net.bin)
+  --epochs <n>       passes over the data (default 6)
+  --lr <f>           learning rate (default 0.01)
+  --limit <n>        cap examples, for step-matched comparisons
+  --eval-games <n>   games to measure against the heuristic; 0 skips
+  --mc               train the value head on final outcomes, not TD targets";
+
 fn main() {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        std::process::exit(0);
+    }
+    const KNOWN: &[&str] = &[
+        "--data", "--net-in", "--net-out", "--epochs", "--lr", "--limit",
+        "--eval-games", "--mc",
+    ];
+    for a in raw.iter().filter(|a| a.starts_with("--")) {
+        if !KNOWN.contains(&a.as_str()) {
+            eprintln!("unknown option {a}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    }
+
     let net_in = parse_flag("--net-in");
     let net_out = parse_flag("--net-out").unwrap_or_else(|| "models/net.bin".into());
     let epochs: u32 = parse_flag("--epochs").and_then(|s| s.parse().ok()).unwrap_or(6);

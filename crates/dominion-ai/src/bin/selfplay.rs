@@ -49,24 +49,84 @@ struct Args {
     lambda: f32,
 }
 
+const USAGE: &str = "\
+generate self-play training data
+
+usage: selfplay [options]
+
+  --tag <name>       names the output file; also seeds generation unless
+                     --seed is given, so two tags never produce the same games
+  --games <n>        how many to play (default 200)
+  --threads <n>      default: all cores
+  --net <path>       guide the search with a trained network
+  --worlds <n>       determinizations per decision (default 8)
+  --iterations <n>   search iterations per world (default 300)
+  --seed <n>         override the tag-derived seed
+  --lambda <f>       TD(lambda) weight (default 0.9)
+
+Output goes to selfplay-data/<tag>-<timestamp>.gamelog and is flushed after
+every game, so the run can be stopped at any time without losing work.";
+
+/// Derive a seed from the tag.
+///
+/// The default used to be a literal 0, which meant every machine that did not
+/// pass --seed generated *byte-identical* games — same kingdoms, same shuffles,
+/// same everything. Several machines pooling that data would have been pooling
+/// the same games several times over, and nothing in the output would have
+/// hinted at it. Seeding from the tag keeps runs reproducible (same tag, same
+/// data) while making collisions between differently-named runs impossible.
+fn seed_from_tag(tag: &str) -> u64 {
+    // FNV-1a: tiny, no dependency, and good enough to separate short names.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in tag.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    h
+}
+
 fn parse_args() -> Args {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        std::process::exit(0);
+    }
     let get = |flag: &str| -> Option<String> {
         raw.iter()
             .position(|a| a == flag)
             .and_then(|i| raw.get(i + 1))
             .cloned()
     };
+    // An unknown flag almost always means a typo, and silently ignoring it
+    // starts a multi-hour run with settings the caller did not ask for.
+    const KNOWN: &[&str] = &[
+        "--tag", "--games", "--threads", "--net", "--worlds", "--iterations",
+        "--seed", "--lambda",
+    ];
+    for (i, a) in raw.iter().enumerate() {
+        if a.starts_with('-') && !KNOWN.contains(&a.as_str()) {
+            eprintln!("unknown option {a}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+        // Skip the value that follows a known flag, so a value like "-1"
+        // is not mistaken for an option.
+        if a.starts_with("--") && KNOWN.contains(&a.as_str()) && i + 1 < raw.len() {
+            continue;
+        }
+    }
+    let tag = get("--tag").unwrap_or_else(|| "default".into());
     Args {
         games: get("--games").and_then(|s| s.parse().ok()).unwrap_or(200),
         threads: get("--threads")
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)),
-        tag: get("--tag").unwrap_or_else(|| "default".into()),
         net_path: get("--net"),
         worlds: get("--worlds").and_then(|s| s.parse().ok()).unwrap_or(8),
         iterations: get("--iterations").and_then(|s| s.parse().ok()).unwrap_or(300),
-        seed: get("--seed").and_then(|s| s.parse().ok()).unwrap_or(0),
+        seed: get("--seed")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| seed_from_tag(&tag)),
+        tag,
         lambda: get("--lambda").and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_LAMBDA),
     }
 }
@@ -204,4 +264,47 @@ fn main() {
         size as f64 / 1e6
     );
     println!("this file is small enough to commit — push it so other machines can train on it too.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seed_from_tag;
+
+    /// Two machines that both omit --seed must not generate the same games.
+    /// The default used to be a literal 0, so every agent produced a
+    /// byte-identical corpus and pooling their work added nothing.
+    #[test]
+    fn different_tags_give_different_seeds() {
+        let tags = [
+            "alice", "bob", "agent-a", "agent-b", "ccweb", "cwopus", "xdtvd7",
+            "opus5a", "cloud", "laptop", "aws", "default", "w1", "w2",
+        ];
+        let seeds: Vec<u64> = tags.iter().map(|t| seed_from_tag(t)).collect();
+        for (i, a) in seeds.iter().enumerate() {
+            for (j, b) in seeds.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, b, "{} and {} collide", tags[i], tags[j]);
+            }
+        }
+    }
+
+    /// Names differing by one character must still separate — agents pick
+    /// things like w1/w2, and a weak hash would map those close together.
+    #[test]
+    fn near_identical_tags_separate() {
+        for (a, b) in [("w1", "w2"), ("agent1", "agent2"), ("a", "b"), ("x", "xx")] {
+            let (sa, sb) = (seed_from_tag(a), seed_from_tag(b));
+            assert_ne!(sa, sb);
+            // and not merely adjacent, which would give overlapping game
+            // sequences once the seed is multiplied out per game index
+            assert!(
+                sa.abs_diff(sb) > 1000,
+                "{a} and {b} seed too close: {sa} vs {sb}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_same_tag_stays_reproducible() {
+        assert_eq!(seed_from_tag("cloud"), seed_from_tag("cloud"));
+    }
 }
