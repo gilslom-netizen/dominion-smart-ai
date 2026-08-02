@@ -59,7 +59,7 @@ impl Layer {
         let mut y = self.b.clone();
         for o in 0..self.out_dim {
             let row = &self.w[o * self.in_dim..(o + 1) * self.in_dim];
-            y[o] += row.iter().zip(x).map(|(w, x)| w * x).sum::<f32>();
+            y[o] += dot(row, x);
         }
         y
     }
@@ -75,10 +75,11 @@ impl Layer {
                 continue;
             }
             let row = &mut self.w[o * self.in_dim..(o + 1) * self.in_dim];
-            for i in 0..self.in_dim {
-                grad_x[i] += row[i] * g;
-                row[i] -= lr * g * x[i];
-            }
+            // Two independent vectorizable passes rather than one interleaved
+            // scalar loop: accumulate this row's contribution to dL/dx, then
+            // apply the weight update.
+            axpy(&mut grad_x, row, g);
+            axpy(row, x, -lr * g);
             self.b[o] -= lr * g;
         }
         grad_x
@@ -122,6 +123,53 @@ enum LayerId {
     Value,
 }
 
+/// Dot product with eight independent accumulators.
+///
+/// The obvious `a.iter().zip(b).map(|(x,y)| x*y).sum()` compiles to a scalar
+/// loop and nothing more, because f32 addition is not associative and LLVM will
+/// not reorder the running sum without being told it may. Summing into several
+/// partial accumulators makes the reassociation explicit in the source, so each
+/// one is an independent dependency chain and the whole thing vectorizes.
+///
+/// This changes the summation order and therefore the last bits of the result.
+/// That is fine here — these are neural network activations, not accounting —
+/// but it does mean training is no longer bit-reproducible against the old
+/// scalar version.
+#[inline]
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    const LANES: usize = 8;
+    let mut acc = [0.0f32; LANES];
+    let chunks = a.len() / LANES;
+
+    for c in 0..chunks {
+        let base = c * LANES;
+        // Fixed-size slices let the bounds checks fold away.
+        let (aw, bw) = (&a[base..base + LANES], &b[base..base + LANES]);
+        for l in 0..LANES {
+            acc[l] += aw[l] * bw[l];
+        }
+    }
+
+    let mut total = 0.0f32;
+    for v in acc {
+        total += v;
+    }
+    for i in chunks * LANES..a.len() {
+        total += a[i] * b[i];
+    }
+    total
+}
+
+/// `dst += scale * src`, the inner loop of the backward pass.
+#[inline]
+fn axpy(dst: &mut [f32], src: &[f32], scale: f32) {
+    debug_assert_eq!(dst.len(), src.len());
+    for (d, s) in dst.iter_mut().zip(src) {
+        *d += scale * s;
+    }
+}
+
 fn relu(x: &[f32]) -> Vec<f32> {
     x.iter().map(|&v| v.max(0.0)).collect()
 }
@@ -138,8 +186,11 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 /// A forward pass, retaining what the backward pass needs.
+///
+/// Deliberately does *not* keep a copy of the input: the caller already owns
+/// it, and cloning 139 floats on every one of a few million training steps is
+/// pure waste.
 struct Forward {
-    x: Vec<f32>,
     h1_pre: Vec<f32>,
     h1: Vec<f32>,
     h2_pre: Vec<f32>,
@@ -196,7 +247,6 @@ impl Net {
         policy_logits.copy_from_slice(&logits_vec);
         let value = sigmoid(self.value_head.forward(&h2)[0]);
         Forward {
-            x: x.to_vec(),
             h1_pre,
             h1,
             h2_pre,
@@ -281,7 +331,7 @@ impl Net {
         let grad_h2_pre = relu_backward(&f.h2_pre, &grad_h2);
         let grad_h1 = self.trunk2.backward(&f.h1, &grad_h2_pre, lr);
         let grad_h1_pre = relu_backward(&f.h1_pre, &grad_h1);
-        let _ = self.trunk1.backward(&f.x, &grad_h1_pre, lr);
+        let _ = self.trunk1.backward(x, &grad_h1_pre, lr);
 
         (policy_loss, value_loss)
     }
@@ -439,6 +489,39 @@ mod tests {
 
     fn zeros() -> [f32; FEATURE_DIM] {
         [0.0; FEATURE_DIM]
+    }
+
+    #[test]
+    fn dot_matches_a_naive_sum() {
+        let mut rng = Rng::new(99);
+        for len in [0usize, 1, 7, 8, 9, 64, 139, 511] {
+            let a: Vec<f32> = (0..len).map(|_| rand_f32(&mut rng, 2.0)).collect();
+            let b: Vec<f32> = (0..len).map(|_| rand_f32(&mut rng, 2.0)).collect();
+            let naive: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+            let fast = dot(&a, &b);
+            // Reassociated summation, so exact equality is not expected —
+            // only that the difference stays at rounding scale.
+            let tol = 1e-4 * naive.abs().max(1.0);
+            assert!(
+                (naive - fast).abs() <= tol,
+                "len {len}: naive {naive} vs dot {fast}"
+            );
+        }
+    }
+
+    #[test]
+    fn axpy_matches_a_naive_loop() {
+        let mut rng = Rng::new(100);
+        for len in [0usize, 1, 5, 8, 33] {
+            let src: Vec<f32> = (0..len).map(|_| rand_f32(&mut rng, 2.0)).collect();
+            let start: Vec<f32> = (0..len).map(|_| rand_f32(&mut rng, 2.0)).collect();
+            let scale = 0.37;
+            let mut fast = start.clone();
+            axpy(&mut fast, &src, scale);
+            for i in 0..len {
+                assert!((fast[i] - (start[i] + scale * src[i])).abs() < 1e-6);
+            }
+        }
     }
 
     #[test]
