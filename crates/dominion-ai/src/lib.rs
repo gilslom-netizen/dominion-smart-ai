@@ -1,6 +1,7 @@
 //! Search-based agents, and the entry points for consulting them.
 
 pub mod advise;
+pub mod compact;
 pub mod evaluator;
 pub mod example;
 pub mod features;

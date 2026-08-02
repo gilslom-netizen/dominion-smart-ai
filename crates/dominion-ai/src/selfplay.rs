@@ -24,6 +24,7 @@ use dominion_bots::policy;
 use dominion_core::{Ctx, Game, Move, Rng};
 
 use crate::evaluator::Evaluator;
+use crate::compact::{GameRecord, RecordedDecision};
 use crate::example::Example;
 use crate::features;
 use crate::mcts::{search_full, MctsConfig};
@@ -167,6 +168,88 @@ pub fn play_selfplay_game_with_lambda(
             td_target,
         })
         .collect()
+}
+
+/// As [`play_selfplay_game_with_lambda`], but returning the compact
+/// [`GameRecord`] as well — the form that is small enough to share between
+/// machines.
+#[allow(clippy::too_many_arguments)]
+pub fn play_selfplay_game_recorded(
+    kingdom: &[dominion_core::Card],
+    num_players: usize,
+    seed: u64,
+    cfg: &MctsConfig,
+    eval: &dyn Evaluator,
+    rng: &mut Rng,
+    lambda: f32,
+) -> GameRecord {
+    let mut game = Game::new(kingdom, num_players, seed).expect("valid kingdom");
+    struct Step {
+        player: usize,
+        ply: u16,
+        policy: Vec<(Move, f32)>,
+        search_value: f32,
+    }
+    let mut pending: Vec<Step> = Vec::new();
+    let mut moves: Vec<Move> = Vec::new();
+
+    let mut guard = 0u32;
+    while !game.is_over() {
+        let d = game.decision().expect("live game has a decision").clone();
+        let ply = moves.len() as u16;
+
+        let mv = if !worth_recording(&d) {
+            let m = policy::default_move(&game.state, &d);
+            if d.options.contains(&m) { m } else { d.options[0] }
+        } else {
+            let outcome = search_full(&game.state, &d, cfg, eval, rng);
+            let total: u32 = outcome.visits.iter().map(|(_, v)| v).sum::<u32>().max(1);
+            pending.push(Step {
+                player: d.player,
+                ply,
+                policy: outcome
+                    .visits
+                    .iter()
+                    .map(|&(mv, v)| (mv, v as f32 / total as f32))
+                    .collect(),
+                search_value: outcome.value,
+            });
+            let temp = temperature(game.state.players[d.player].turns);
+            sample_by_visits(rng, &outcome.visits, temp)
+        };
+
+        game.apply(mv).unwrap();
+        moves.push(mv);
+
+        guard += 1;
+        if guard > 2000 {
+            break;
+        }
+    }
+
+    let results = game.state.results();
+    let trajectory: Vec<(usize, f32)> = pending
+        .iter()
+        .map(|s| (s.player, s.search_value))
+        .collect();
+    let targets = lambda_returns(&trajectory, &results, lambda);
+
+    GameRecord {
+        kingdom: kingdom.to_vec(),
+        players: num_players as u8,
+        seed,
+        moves,
+        decisions: pending
+            .into_iter()
+            .zip(targets)
+            .map(|(step, td_target)| RecordedDecision {
+                ply: step.ply,
+                policy: step.policy,
+                outcome: results[step.player],
+                td_target,
+            })
+            .collect(),
+    }
 }
 
 /// TD(lambda) returns along one game's trajectory.

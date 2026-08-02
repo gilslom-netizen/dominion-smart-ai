@@ -11,7 +11,7 @@
 //! stronger network.
 
 use dominion_ai::mcts::NetMctsAgent;
-use dominion_ai::{example, MctsConfig, Net};
+use dominion_ai::{compact, example, MctsConfig, Net};
 use dominion_bots::match_runner::run_match_parallel;
 use dominion_bots::policy::HeuristicBot;
 use dominion_bots::{Agent, Kingdoms};
@@ -35,29 +35,47 @@ fn main() {
     // outcome instead, so the two can be compared on identical data.
     let use_td = !std::env::args().any(|a| a == "--mc");
 
-    let shard_paths: Vec<String> = std::fs::read_dir("selfplay-data")
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.extension().map(|x| x == "shard").unwrap_or(false))
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut shard_paths: Vec<String> = Vec::new();
+    let mut gamelog_paths: Vec<String> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir("selfplay-data") {
+        for entry in rd.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = path.to_string_lossy().into_owned();
+            match path.extension().and_then(|x| x.to_str()) {
+                Some("shard") => shard_paths.push(name),
+                Some("gamelog") => gamelog_paths.push(name),
+                _ => {}
+            }
+        }
+    }
+    shard_paths.sort();
+    gamelog_paths.sort();
 
-    if shard_paths.is_empty() {
-        eprintln!("no shards found in selfplay-data/ — run bin/selfplay first");
+    if shard_paths.is_empty() && gamelog_paths.is_empty() {
+        eprintln!("nothing in selfplay-data/ — run bin/selfplay first");
         std::process::exit(1);
     }
 
-    println!("reading {} shard(s):", shard_paths.len());
+    let mut examples = Vec::new();
+    // Compact game logs, expanded by replaying each game. These are the ones
+    // that travel between machines.
+    for p in &gamelog_paths {
+        let got = compact::read_examples(p).unwrap_or_else(|e| {
+            eprintln!("failed to read {p}: {e}");
+            std::process::exit(1);
+        });
+        println!("  {p}: {} examples (replayed)", got.len());
+        examples.extend(got);
+    }
+    // Legacy expanded shards, kept readable so earlier data is not stranded.
     for p in &shard_paths {
-        println!("  {p}");
+        let got = example::read_shard(p).unwrap_or_else(|e| {
+            eprintln!("failed to read {p}: {e}");
+            std::process::exit(1);
+        });
+        println!("  {p}: {} examples", got.len());
+        examples.extend(got);
     }
-    let mut examples = example::read_shards(&shard_paths).unwrap_or_else(|e| {
-        eprintln!("failed to read shards: {e}");
-        std::process::exit(1);
-    });
     println!("{} training examples", examples.len());
     println!(
         "value target: {}",

@@ -14,7 +14,12 @@
 //! network's policy and value instead — the loop that is supposed to make each
 //! generation stronger than the last.
 //!
-//! **Completed games are written to the shard as they finish**, not buffered
+//! Output is the compact `.gamelog` format: the game itself rather than the
+//! expanded feature vectors, roughly 20x smaller, and small enough to commit so
+//! that several machines' self-play can actually be pooled into one training
+//! run. See [`dominion_ai::compact`].
+//!
+//! **Completed games are written to the file as they finish**, not buffered
 //! until the end. A run of a few thousand games takes hours, and holding it all
 //! in memory meant any interruption — a crash, a reboot, or simply wanting to
 //! change the code — threw the whole thing away. With incremental writes the
@@ -28,8 +33,9 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use dominion_ai::evaluator::{HeuristicEvaluator, NetEvaluator};
-use dominion_ai::selfplay::{play_selfplay_game_with_lambda, DEFAULT_LAMBDA};
-use dominion_ai::{example, MctsConfig, Net};
+use dominion_ai::compact;
+use dominion_ai::selfplay::{play_selfplay_game_recorded, DEFAULT_LAMBDA};
+use dominion_ai::{MctsConfig, Net};
 use dominion_core::{Game, Rng};
 
 struct Args {
@@ -69,7 +75,7 @@ fn main() {
     let args = parse_args();
     std::fs::create_dir_all("selfplay-data").ok();
     let out_path = format!(
-        "selfplay-data/{}-{}.shard",
+        "selfplay-data/{}-{}.gamelog",
         args.tag,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -144,14 +150,14 @@ fn main() {
                         let mut rng = Rng::new(game_seed ^ 0x9E3779B97F4A7C15);
                         let mut krng = Rng::new(game_seed ^ 0xABCD);
                         let kingdom = Game::random_kingdom(&mut krng);
-                        let examples = match &net {
+                        let record = match &net {
                             Some(n) => {
                                 let eval = NetEvaluator { net: n };
-                                play_selfplay_game_with_lambda(
+                                play_selfplay_game_recorded(
                                     &kingdom, 2, game_seed, &cfg, &eval, &mut rng, args.lambda,
                                 )
                             }
-                            None => play_selfplay_game_with_lambda(
+                            None => play_selfplay_game_recorded(
                                 &kingdom,
                                 2,
                                 game_seed,
@@ -165,12 +171,12 @@ fn main() {
                         // interrupted run keeps everything already finished.
                         {
                             let _guard = writer.lock().unwrap_or_else(|e| e.into_inner());
-                            if let Err(e) = example::append_shard(out_path, &examples) {
+                            if let Err(e) = compact::append_games(out_path, &[record.clone()]) {
                                 eprintln!("failed to append to {out_path}: {e}");
                                 std::process::exit(1);
                             }
                         }
-                        written.fetch_add(examples.len(), Ordering::Relaxed);
+                        written.fetch_add(record.decisions.len(), Ordering::Relaxed);
 
                         let n_done = done.fetch_add(1, Ordering::Relaxed) + 1;
                         if n_done % 10 == 0 || n_done == games {
@@ -189,11 +195,13 @@ fn main() {
         }
     });
 
+    let size = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
     println!(
-        "wrote {} examples from {} games to {out_path} in {:.1}s",
+        "wrote {} decisions from {} games to {out_path} in {:.1}s ({:.1} MB)",
         written.load(Ordering::Relaxed),
         done.load(Ordering::Relaxed),
-        start.elapsed().as_secs_f64()
+        start.elapsed().as_secs_f64(),
+        size as f64 / 1e6
     );
-    println!("next: run bin/train — it reads every shard in selfplay-data/.");
+    println!("this file is small enough to commit — push it so other machines can train on it too.");
 }
