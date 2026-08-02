@@ -22,10 +22,14 @@ engine work rather than AI work.
 ## Commands
 
 ```sh
-cargo test                                  # 45 tests: rules, fuzzing, logs, search
+cargo test                                  # 77 tests
 cargo run --release --bin ladder            # heuristic round robin
 cargo run --release --bin bench             # machine check + search strength
 cargo run --release --bin advise -- --demo  # ask the AI about a position
+
+cargo run --release --bin selfplay -- --games 3000 --tag <name> --net models/net.bin
+cargo run --release --bin train -- --net-in models/net.bin --net-out models/net.bin
+cargo run --release --example net_vs_net -- a.bin b.bin 200
 ```
 
 ## Engine design
@@ -84,47 +88,56 @@ cards the owner deliberately put on top (Harbinger, Artisan, Sentry,
 Bureaucrat), so determinization does not shuffle away the thing those cards are
 for.
 
-## Search
+## Search: ISMCTS
 
-`dominion-ai` runs determinized PUCT: sample worlds consistent with the player's
-view, search each, pick the move the ensemble visited most.
+`dominion-ai` runs Information Set MCTS with a PUCT selection rule: one shared
+tree, re-determinized every iteration, so all samples accumulate into the same
+statistics.
 
-Plain UCT did not work at all — it lost every game to BM+Smithy with near-uniform
-visit counts, ending turns without playing Treasure and buying Curses. The
+It did not start there. Plain UCT lost every game to BM+Smithy with near-uniform
+visit counts — ending turns without playing Treasure and buying Curses. The
 branching factor at a buy is ~15, adjacent buys differ by about a point of win
-probability, and a rollout returns one bit; the visit counts came out flat and
-the search picked noise. Three fixes, all structural:
+probability, and a rollout returns one bit, so the counts came out flat and the
+search picked noise. Three fixes, all structural:
 
 * **`prior::restrict`** drops provably bad moves. The load-bearing one is that
   playing a Treasure in the buy phase is never a mistake in the Base set (no
   Treasure has a downside, nothing cares about unspent money) and the order
-  cannot matter, so the entire choice collapses to one forced move. That removes
-  most of the buy-phase branching on its own.
-* **`prior::priors`** supplies a distribution over what is left, concentrated on
-  the heuristic's own pick. This is the slot a policy network will fill; the
-  search does not care where the distribution comes from.
-* **PUCT with first-play urgency** — `Q + c·P·√N/(1+n)` — instead of expanding
-  every child once before learning anything.
+  cannot matter, so the entire choice collapses to one forced move.
+* **`prior::priors`** supplies a distribution over what is left. This is the
+  slot the policy network fills; the search does not care where it comes from.
+* **PUCT with first-play urgency** instead of expanding every child once before
+  learning anything.
 
-At 8 worlds × 400 iterations, over 120 games per matchup:
+Then the tree itself. The first version was plain PIMC: N independent
+determinized worlds, an independent tree in each, visit counts summed at the
+end. At 8 worlds x 400 iterations every node was backed by at most 400 samples
+though 3200 were paid for. ISMCTS shares one tree across all of them, treating a
+node as an information set that holds the union of moves any world offered,
+with **availability counts** so a move legal in a tenth of the worlds is not
+judged against a universally-legal sibling on raw visits.
 
-| | win rate | Elo |
+Dominion suits this unusually well: the deciding player knows their own hand, so
+every determinization offers the same moves at the root, and move sets only
+diverge deeper once cards have been drawn.
+
+## Value targets: TD(lambda)
+
+A game runs to roughly 240 decisions. Training every one of them against the
+final win/loss is one bit of signal spread impossibly thin — a turn-three buy
+credited with an outcome it barely influenced.
+
+Self-play instead records a TD(lambda) target, walking each trajectory backwards
+with `G_t = (1-λ)·V(s_{t+1}) + λ·G_{t+1}`, λ = 0.9. The bootstrap comes from
+**the search**, not the network: the root value of a few thousand ISMCTS
+simulations beats a single forward pass, so the targets are informative even
+while the network is still weak.
+
+Confirmed on identical data, differing only in the value target:
+
+| | win rate | |
 |---|---|---|
-| MCTS vs Heuristic | 60.4% ± 4.5% | +73 |
-| MCTS vs DoubleWitch | 64.2% ± 4.4% | +101 |
-
-The first row is the honest one: the search uses that heuristic as both its prior
-and its rollout policy, so the margin is strength the search itself added, not a
-better hand-written strategy. The second is a cross-check, and it lines up — the
-heuristic beats Double Witch 53.5%, so a search worth +73 Elo on top of it should
-land near 64%, and it does. Intransitive results here would have meant the
-measurements were noise.
-
-It is also a modest margin, and the reason is structural rather than a matter of
-tuning. The search evaluates a position by rolling it out with the heuristic, so
-it can only recognise what the heuristic can recognise. Turning the rollout into
-a learned value head is where the large gains are, and it is the next thing on
-the list.
+| TD net vs MC net | **64.67% ± 2.76%** | 5.3σ |
 
 ## The heuristic, and why it matters so much
 
@@ -190,28 +203,78 @@ considered:
 
 The visit spread is the honest measure of how confident the search is.
 
-## Status and roadmap
+## What did not work, and what that ruled out
 
-Done:
+Four things were tried and measured. Three failed, and the failures are more
+informative than the success — each one removed a plausible direction.
 
-- [x] Complete Base 2E rules engine, fuzzed and unit-tested
+| Change | Result | |
+|---|---|---|
+| TD(λ) value targets | 64.67% ± 2.76 vs MC | ✅ 5.3σ |
+| Merge 4 machines' networks by averaging | 48.12% ± 2.50 vs the best single one | ❌ |
+| Double the training data (twice) | 49.25% ± 3.54 | ❌ flat |
+| 7x wider network (512×256) | 50.50% ± 2.89 | ❌ 0.2σ |
+
+**Weight merging.** Four contributors totalling 12,230 games averaged into a
+network that could not beat the single 3,500-game one. Federated averaging
+assumes each contributor takes a *small* step from a shared checkpoint. Eight
+full epochs over hundreds of thousands of examples is not a small step, and two
+networks that have travelled that far stop being averageable even from a common
+start — hidden unit 7 in one no longer corresponds to hidden unit 7 in the
+other. The "same starting checkpoint" precondition is necessary but not
+sufficient.
+
+**More data and more capacity both did nothing**, which pointed at the real
+limit. Measuring the entropy of the policy targets found it: cross-entropy
+cannot fall below the entropy of its target, the targets average **0.761 nats**
+over the examples that carry any signal, and training sits at **0.903**. The
+network already reproduces the search's policy to within ~0.14 nats. It is not
+underfitting, and no amount of data or width changes that.
+
+Two side findings from the same measurement:
+
+* **61.7% of examples had exactly one legal move** after restriction, so their
+  policy target is a point mass and their gradient is exactly zero. They cost
+  that share of every epoch. They now skip the policy head — but they are *kept*
+  for the value head, because dropping them outright cost 61.7% of its training
+  data and measurably hurt it (value loss 0.0060 → 0.0088).
+* The remaining ceiling is therefore **the quality of the search that produced
+  the targets**. Imitating a mediocre search perfectly yields a mediocre player.
+  Deeper search at generation time is the next thing to test; it costs 5.8x per
+  game for 3.3x the iterations, so the honest comparison is compute-matched, not
+  game-matched.
+
+## Sharing self-play between machines
+
+Self-play parallelises across machines; the data did not. A 3000-game `.shard`
+of expanded feature vectors is 427MB, past what GitHub accepts, which is what
+pushed us toward merging networks instead — and that failed.
+
+The fix is that the features are *derivable*. The engine is deterministic given
+a kingdom, a seed and a move list, so the compact `.gamelog` format stores the
+game and re-derives features by replaying at training time: 30 bytes per
+decision instead of 600, **23MB per 3000 games instead of 427MB**. Replay costs
+seconds against the hours the games took to search.
+
+Both formats are readable, so no earlier data is stranded, and both are written
+incrementally — a run killed at any moment leaves a valid file, and the reader
+stops at a half-written trailing record rather than rejecting the whole thing.
+That was verified by SIGKILLing a live run and recovering 4283 intact examples,
+not just by unit test.
+
+## Status
+
+- [x] Base 2E engine, fuzzed and unit-tested
 - [x] Determinization with topdeck knowledge preserved
-- [x] Heuristic policy calibrated against the ladder
-- [x] Determinized PUCT search with priors
-- [x] Game logs, prefix replay, and the advice API
-- [x] Seat-swapped, seed-paired, multi-threaded match harness
-
-Next, in order:
-
-- [ ] **Value network.** The search's weakest link is that it evaluates a
-      position by rolling it out with the heuristic — so it can only see what the
-      heuristic can see. A learned value head replaces the rollout and is where
-      the large gains are.
-- [ ] **Policy network** to replace `prior::priors`, trained on search visit
-      counts. The interface for this already exists.
-- [ ] **Self-play loop** with Elo tracking against the ladder.
-- [ ] Parser for real Dominion Online logs, so games against Hard can be
-      analysed directly rather than transcribed.
+- [x] ISMCTS with priors and availability counts
+- [x] TD(λ) value targets, confirmed at 5.3σ
+- [x] Compact shareable self-play format
+- [x] Game logs, prefix replay, advice API
+- [ ] **Deeper search at generation time** — the open question
+- [ ] Faster training: the loop is single-threaded scalar Rust, and a 512×256
+      network takes 45 minutes for 6 epochs. Batching and SIMD are worth
+      10-50x and now gate iteration speed.
+- [ ] Parser for real Dominion Online logs
 
 ## Measuring against the Hard bot
 
@@ -223,11 +286,15 @@ enough to see it.
 
 ## Where to run training
 
-Dominion is a CPU workload, not a GPU one: the network is a small MLP over a few
-hundred features, and the bottleneck is generating self-play games. Cores matter,
-GPUs mostly do not — which makes the free GPU notebook services a poor fit, since
-they are generous with GPU and stingy with vCPU.
+Dominion self-play is a CPU workload: the network is a small MLP and the
+bottleneck is generating games. Cores matter, GPUs do not, which makes free GPU
+notebooks a poor fit — they are generous with GPU and stingy with vCPU.
 
-Measured here (4 vCPU): ~7,500 heuristic games/s/core, and ~0.6 searched games/s
-across all four cores at 8 worlds × 400 iterations. `bin/bench` prints the same
-figures for any machine.
+Measured: ~0.23 games/s on 4 cores at 8x300 iterations, ~0.04 games/s at 8x1000.
+`bin/bench` prints the same figures for any machine.
+
+**Buying a bigger machine is not currently justified.** The learning curve is
+flat — doubling the data twice changed nothing measurable — so a server that
+generates 10x more games of the same kind buys 10x more of something that has
+stopped helping. That calculus changes only if deeper search turns out to help,
+since deeper search is what a bigger machine would actually be for.
