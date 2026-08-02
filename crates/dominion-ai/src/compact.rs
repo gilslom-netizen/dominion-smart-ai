@@ -250,13 +250,11 @@ pub fn read_games(path: &str) -> Result<Vec<GameRecord>, CompactError> {
     let mut c = Cursor { b: &bytes, p: 4 };
     let mut out = Vec::new();
     while c.p < bytes.len() {
-        let start = c.p;
+        // A half-written trailing game stops the read; everything before it is
+        // complete and worth keeping.
         match decode_game(&mut c) {
             Some(g) => out.push(g),
-            None => {
-                c.p = start;
-                break;
-            }
+            None => break,
         }
     }
     Ok(out)
