@@ -58,10 +58,45 @@ fn main() {
     let (_, turns) = play_game(&kingdom, &mut [&mut searcher, &mut opp], 7);
     let secs = t.elapsed().as_secs_f64();
     println!("search: {worlds} worlds x {iterations} iters -> {secs:.1}s per game ({turns} turns)");
+
+    // Two earlier estimates of the self-play rate were reported ~2x optimistic
+    // against what production runs actually measured, for two reasons that
+    // both live in the extrapolation rather than the timing:
+    //
+    //   1. the timed game above searches on *one* side and lets the heuristic
+    //      play the other, while self-play searches on both — roughly double
+    //      the work per game; and
+    //   2. `cores / secs` assumes throughput scales linearly with cores, which
+    //      it does not once memory bandwidth and SMT siblings are in play.
+    //
+    // So measure the thing directly instead of extrapolating to it: run one
+    // search-vs-search game on every core at once and time the wall clock.
+    // Costs about as long as a single game and needs no scaling assumption.
+    let t = Instant::now();
+    std::thread::scope(|s| {
+        for c in 0..cores {
+            let kingdom = &kingdom;
+            s.spawn(move || {
+                let cfg = MctsConfig {
+                    seed: 0x5EED ^ (c as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                    ..cfg
+                };
+                let mut a = MctsAgent::new(cfg);
+                let mut b = MctsAgent::new(cfg);
+                play_game(kingdom, &mut [&mut a, &mut b], 7 + c as u64);
+            });
+        }
+    });
+    let wall = t.elapsed().as_secs_f64();
     println!(
-        "estimated self-play rate: {:.1} games/s across {cores} cores",
+        "measured self-play rate: {:.2} games/s ({cores} concurrent search-vs-search games in {wall:.1}s)",
+        cores as f64 / wall
+    );
+    println!(
+        "  (naive {:.2} games/s if you assume one-sided search and linear scaling)",
         cores as f64 / secs
     );
+    println!("  net-guided self-play (--net) is slower still: the prior costs a forward pass per node.");
 
     println!("\n== strength ({} games per matchup) ==", pairs * 2);
 

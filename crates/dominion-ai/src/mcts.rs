@@ -58,6 +58,11 @@ pub struct MctsConfig {
     /// Give up searching decisions that cannot matter much, to spend the
     /// budget where it counts.
     pub skip_trivial: bool,
+    /// Flattening applied to a *network* prior before the search uses it; see
+    /// [`crate::evaluator::NetEvaluator::temperature`]. 1.0 leaves it as
+    /// trained. Ignored by the heuristic-prior agent, which has its own
+    /// concentration built into `prior::priors`.
+    pub prior_temperature: f32,
     pub seed: u64,
 }
 
@@ -68,6 +73,7 @@ impl Default for MctsConfig {
             iterations: 400,
             exploration: 2.5,
             skip_trivial: true,
+            prior_temperature: 1.0,
             seed: 0x5EED,
         }
     }
@@ -495,7 +501,14 @@ pub struct NetMctsAgent<'a> {
 
 impl<'a> NetMctsAgent<'a> {
     pub fn new(cfg: MctsConfig, net: &'a crate::net::Net) -> Self {
-        let label = format!("NetMCTS({}x{})", cfg.worlds, cfg.iterations);
+        let label = if (cfg.prior_temperature - 1.0).abs() < 1e-6 {
+            format!("NetMCTS({}x{})", cfg.worlds, cfg.iterations)
+        } else {
+            format!(
+                "NetMCTS({}x{} t{} c{})",
+                cfg.worlds, cfg.iterations, cfg.prior_temperature, cfg.exploration
+            )
+        };
         NetMctsAgent {
             rng: Rng::new(cfg.seed),
             cfg,
@@ -513,7 +526,8 @@ impl<'a> Agent for NetMctsAgent<'a> {
         if self.cfg.skip_trivial && is_trivial(d) {
             return policy::default_move(state, d);
         }
-        let eval = crate::evaluator::NetEvaluator::new(self.net);
+        let eval =
+            crate::evaluator::NetEvaluator::with_temperature(self.net, self.cfg.prior_temperature);
         search_with(state, d, &self.cfg, &eval, &mut self.rng).0
     }
 
