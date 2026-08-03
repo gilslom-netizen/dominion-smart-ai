@@ -205,8 +205,10 @@ The visit spread is the honest measure of how confident the search is.
 
 ## What did not work, and what that ruled out
 
-Four things were tried and measured. Three failed, and the failures are more
-informative than the success — each one removed a plausible direction.
+Seven things were tried and measured. Six failed, and the failures are more
+informative than the success — each one removed a plausible direction, and
+together they converge on a single cause, described in the section after this
+one.
 
 | Change | Result | |
 |---|---|---|
@@ -214,6 +216,9 @@ informative than the success — each one removed a plausible direction.
 | Merge 4 machines' networks by averaging | 48.12% ± 2.50 vs the best single one | ❌ |
 | Double the training data (twice) | 49.25% ± 3.54 | ❌ flat |
 | 7x wider network (512×256) | 50.50% ± 2.89 | ❌ 0.2σ |
+| Adam instead of SGD | loss 0.9046 → 0.8726, strength 50.63% ± 2.50 | ❌ 0.3σ |
+| 16x the search budget | 50.42% ± 4.56 | ❌ 0.1σ |
+| Flatten the prior to unlock the search | 27.50% ± 4.08 at 16x800 | ❌ 5.5σ *worse* |
 
 **Weight merging.** Four contributors totalling 12,230 games averaged into a
 network that could not beat the single 3,500-game one. Federated averaging
@@ -244,6 +249,66 @@ Two side findings from the same measurement:
   game for 3.3x the iterations, so the honest comparison is compute-matched, not
   game-matched.
 
+## The search reproduces its prior, and that turned out to be a good thing
+
+Extra search bought nothing: 16x the budget won 50.42% ± 4.56 against 1x.
+`search_agreement` found why — across a 16x budget range the search changed
+the prior's top move in 0.7%–5.7% of decisions, and the top move's *visit
+share rose* from 68.5% to 71.1%. The search was close to an identity function
+over its own prior.
+
+The cause was a feedback loop with a clear origin. `prior::priors` gave the
+heuristic's move a weight of 6.0 against 1.0 for everything else; the search
+therefore produced visit distributions with ~70% of the mass on one move; the
+network trained on those distributions learned to reproduce that
+concentration; and PUCT's `c·P·√N/(1+n)` then spent every additional
+iteration reinforcing the move the prior already liked.
+
+So prior temperature was added to flatten it, and `unlock_sweep` confirmed
+the mechanism works — at temperature 4.0 the top move's visit share falls to
+41.1% and 16x the budget changes the decision in 25.4% of positions instead
+of 6.5%.
+
+**It made the AI much weaker, and worse in proportion to how hard it
+searched.**
+
+| | result | |
+|---|---|---|
+| unlocked 16x800 vs unlocked 4x200 | 35.00% ± 4.35 | −108 Elo |
+| unlocked 8x400 vs locked 8x400 | 38.33% ± 4.44 | −83 Elo |
+| unlocked 16x800 vs locked 16x800 | 27.50% ± 4.08 | −168 Elo |
+
+Same network on both sides throughout, so search configuration is the only
+variable. Harm that scales with the budget is also the signature of a sign or
+perspective bug in backup, so the next measurement checked for one directly —
+`value_calibration` scores the raw value head, and the search's root value at
+three budgets, against what actually happened:
+
+| estimator | Brier | correlation |
+|---|---|---|
+| value head (raw) | 0.1691 | 0.521 |
+| search 4x200 | 0.1668 | 0.536 |
+| search 8x400 | 0.1663 | 0.537 |
+| search 16x800 | 0.1660 | 0.537 |
+| always 0.5 | 0.2500 | — |
+
+No bug: the tree improves its own estimate, monotonically, in the right
+direction. It improves it by 1.8% relative, saturating at 8x400 — 16x the
+budget over 4x buys 0.0008 Brier.
+
+That single table explains every failed result above. The search's `Q` is an
+average of leaf values from an evaluator correlating 0.52 with the outcome;
+averaging more of them reduces variance but not bias, so `Q` can never
+resolve the difference between two candidate buys. The prior carries real
+Dominion knowledge distilled from the heuristic. `Q`, at the resolution move
+selection needs, is close to noise. Flattening the prior traded the knowledge
+for the noise.
+
+The prior was not a cage around a better search. It was the strongest
+component in the system, and the search was riding it. **The binding
+constraint is the accuracy of the leaf evaluation** — not the search, not the
+prior, not the optimizer, and not the amount of data.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`
@@ -270,7 +335,13 @@ not just by unit test.
 - [x] TD(λ) value targets, confirmed at 5.3σ
 - [x] Compact shareable self-play format
 - [x] Game logs, prefix replay, advice API
-- [ ] **Deeper search at generation time** — the open question
+- [x] ~~Deeper search at generation time~~ — ruled out, twice. 16x the budget
+      is worth 50.42% ± 4.56, and the calibration table above says why: the
+      tree improves its leaf estimate by 1.8%, saturating at 8x400.
+- [ ] **A leaf evaluation worth searching with** — the open question, and the
+      one every failed experiment points at. At correlation 0.52 with the
+      outcome, the value head cannot separate two candidate buys, so the
+      search has nothing to add and the prior does all the work.
 - [ ] Faster training: the loop is single-threaded scalar Rust, and a 512×256
       network takes 45 minutes for 6 epochs. Batching and SIMD are worth
       10-50x and now gate iteration speed.

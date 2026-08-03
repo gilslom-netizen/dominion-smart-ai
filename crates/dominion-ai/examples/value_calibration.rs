@@ -21,7 +21,24 @@
 
 use dominion_ai::evaluator::{Evaluator, NetEvaluator};
 use dominion_ai::{mcts, prior, MctsConfig, Net};
-use dominion_core::{Ctx, Game, Rng};
+use dominion_core::{Ctx, Decision, Game, GameState, Move, Rng};
+
+/// The network's prior with the value head deliberately withheld, so the
+/// search falls back to heuristic rollouts at every leaf.
+///
+/// This is the control the value head has never been measured against. The
+/// rollout is what the value head replaced, and replacing it was justified
+/// on cost (O(1) instead of playing the game out), never on accuracy.
+struct RolloutEvaluator<'a> {
+    net: &'a Net,
+}
+
+impl<'a> Evaluator for RolloutEvaluator<'a> {
+    fn priors(&self, state: &GameState, d: &Decision, options: &[Move]) -> Vec<f32> {
+        NetEvaluator::new(self.net).priors(state, d, options)
+    }
+    // leaf_value stays at the default `None` — that is the whole point.
+}
 
 /// Budgets to price each position at, as (worlds, iterations).
 const BUDGETS: [(u32, u32); 3] = [(4, 200), (8, 400), (16, 800)];
@@ -77,10 +94,18 @@ fn main() {
     let net = Net::load(&path).expect("load network");
     let eval = NetEvaluator::new(&net);
 
+    let roll_eval = RolloutEvaluator { net: &net };
+
     let mut net_acc = Acc::new();
     let mut search_acc: Vec<Acc> = BUDGETS.iter().map(|_| Acc::new()).collect();
+    let mut roll_acc = Acc::new();
+    // Thirds of each game, to separate irreducible early-game uncertainty from
+    // positions an estimator ought to be able to call.
+    let mut net_thirds = [Acc::new(), Acc::new(), Acc::new()];
+    let mut roll_thirds = [Acc::new(), Acc::new(), Acc::new()];
+    let mut search_thirds = [Acc::new(), Acc::new(), Acc::new()];
     // Predictions held until the game finishes and the outcome is known.
-    let mut pending: Vec<(usize, f32, Vec<f32>)> = Vec::new();
+    let mut pending: Vec<(usize, f32, Vec<f32>, f32)> = Vec::new();
 
     let mut rng = Rng::new(0xCA11B);
     for g in 0..games {
@@ -117,7 +142,14 @@ fn main() {
                         mcts::search_full(&game.state, &d, &cfg, &eval, &mut rng).value
                     })
                     .collect();
-                pending.push((d.player, v_net, v_search));
+                let mid = MctsConfig {
+                    worlds: 8,
+                    iterations: 400,
+                    ..play_cfg
+                };
+                let v_roll =
+                    mcts::search_full(&game.state, &d, &mid, &roll_eval, &mut rng).value;
+                pending.push((d.player, v_net, v_search, v_roll));
             }
 
             let out = mcts::search_full(&game.state, &d, &play_cfg, &eval, &mut rng);
@@ -125,12 +157,19 @@ fn main() {
         }
 
         let results = game.state.results();
-        for (player, v_net, v_search) in pending.drain(..) {
+        let total = pending.len().max(1);
+        for (i, (player, v_net, v_search, v_roll)) in pending.drain(..).enumerate() {
             let actual = results[player];
             net_acc.push(v_net, actual);
+            roll_acc.push(v_roll, actual);
             for (acc, v) in search_acc.iter_mut().zip(&v_search) {
                 acc.push(*v, actual);
             }
+            let third = (3 * i / total).min(2);
+            net_thirds[third].push(v_net, actual);
+            roll_thirds[third].push(v_roll, actual);
+            // The middle budget, to match the rollout arm's.
+            search_thirds[third].push(v_search[1], actual);
         }
 
         if (g + 1) % 5 == 0 {
@@ -163,13 +202,38 @@ fn main() {
         );
     }
     println!(
+        "{:>18}  {:>8.4}  {:>8.3}  {:>10.3}   <- value head withheld",
+        "rollout 8x400",
+        roll_acc.brier(),
+        roll_acc.corr(),
+        roll_acc.mean_pred()
+    );
+    println!(
         "\n{:>18}  {:>8.4}   (always predicting 0.5)",
         "baseline", 0.25
     );
+
+    println!("\nBrier by third of game (where the estimate has room to be right):");
+    println!("{:>18}  {:>8}  {:>8}  {:>8}", "estimator", "early", "middle", "late");
+    for (name, accs) in [
+        ("value head (raw)", &net_thirds),
+        ("search 8x400", &search_thirds),
+        ("rollout 8x400", &roll_thirds),
+    ] {
+        println!(
+            "{:>18}  {:>8.4}  {:>8.4}  {:>8.4}",
+            name,
+            accs[0].brier(),
+            accs[1].brier(),
+            accs[2].brier()
+        );
+    }
+
     println!(
-        "\nLower brier is better. A sound tree should beat the raw value head\n\
-         and improve with budget. If it gets worse instead, the tree is\n\
-         degrading the estimate it starts from, and the search — not the\n\
-         network — is what needs fixing."
+        "\nLower brier is better. The rollout arm is the control the value head\n\
+         has never been measured against: it is what the value head replaced,\n\
+         and the replacement was justified on cost, not on accuracy. If the\n\
+         rollout scores better, the value head is the weak link and the search\n\
+         has been reasoning from a worse leaf estimate than it could have."
     );
 }
