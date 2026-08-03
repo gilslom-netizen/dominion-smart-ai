@@ -342,9 +342,13 @@ Better calibration is not automatically stronger play, and the rollout costs
 |---|---|---|
 | rollout 8x400 vs value head 8x400 (game-matched) | 64.17% ± 4.38 | ✅ +101 Elo, 3.2σ |
 | rollout 8x400 vs value head 8x1673 (equal wall clock) | 59.17% ± 4.49 | ✅ +64 Elo, 2.0σ |
+| the same, re-run over 500 games | 57.00% ± 2.21 | ✅ +49 Elo, 3.2σ |
 
-It wins even when the value head is handed 4.2x the simulations to spend the
-same time. This is the second thing to work, and the largest single effect
+It wins even when the value head is handed 4.3x the simulations to spend the
+same time. The wall-clock arm is the one that decides a default, so it was
+re-run at 500 games before flipping anything; the point estimate settled from
+59.17% to 57.00% and the significance rose from 2.0σ to 3.2σ. **The rollout
+is now the default** (`MctsConfig::use_value_head` defaults to `false`). This is the second thing to work, and the largest single effect
 found after TD(λ) — and it came from *removing* a component rather than
 adding one.
 

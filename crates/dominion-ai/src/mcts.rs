@@ -66,11 +66,15 @@ pub struct MctsConfig {
     /// Price leaves with the network's value head (`true`) or with a
     /// heuristic rollout (`false`).
     ///
-    /// The rollout is much the better calibrated of the two — see
-    /// [`crate::evaluator::RolloutEvaluator`] for the measurement — but a
-    /// better-calibrated leaf estimate is not automatically a stronger
-    /// player, and the rollout costs far more per leaf. The default stays on
-    /// the value head until a head-to-head says otherwise.
+    /// Defaults to the rollout, which measured both better calibrated (Brier
+    /// 0.1301 against 0.1599) and stronger: 64.17% ± 4.38 at equal search,
+    /// and 57.00% ± 2.21 over 500 games when the value head is handed 4.3x
+    /// the simulations to spend the same wall clock. It wins on accuracy per
+    /// unit of time, not just per simulation, which is what makes it the
+    /// right default rather than merely the more accurate option.
+    ///
+    /// The value head stays selectable because it is ~4.3x cheaper per leaf,
+    /// which still matters wherever throughput beats per-decision quality.
     pub use_value_head: bool,
     pub seed: u64,
 }
@@ -83,7 +87,7 @@ impl Default for MctsConfig {
             exploration: 2.5,
             skip_trivial: true,
             prior_temperature: 1.0,
-            use_value_head: true,
+            use_value_head: false,
             seed: 0x5EED,
         }
     }
@@ -511,8 +515,8 @@ pub struct NetMctsAgent<'a> {
 
 impl<'a> NetMctsAgent<'a> {
     pub fn new(cfg: MctsConfig, net: &'a crate::net::Net) -> Self {
-        let label = if !cfg.use_value_head {
-            format!("NetMCTS({}x{} rollout)", cfg.worlds, cfg.iterations)
+        let label = if cfg.use_value_head {
+            format!("NetMCTS({}x{} valuehead)", cfg.worlds, cfg.iterations)
         } else if (cfg.prior_temperature - 1.0).abs() < 1e-6 {
             format!("NetMCTS({}x{})", cfg.worlds, cfg.iterations)
         } else {
