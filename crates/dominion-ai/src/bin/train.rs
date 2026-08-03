@@ -37,7 +37,9 @@ usage: train [options]
   --lr <f>           learning rate (default 0.01)
   --limit <n>        cap examples, for step-matched comparisons
   --eval-games <n>   games to measure against the heuristic; 0 skips
-  --mc               train the value head on final outcomes, not TD targets";
+  --mc               train the value head on final outcomes, not TD targets
+  --sgd              plain SGD instead of Adam (the historical default)
+  --decay <f>        multiply the learning rate by this each epoch (default 1.0)";
 
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
@@ -47,7 +49,7 @@ fn main() {
     }
     const KNOWN: &[&str] = &[
         "--data", "--net-in", "--net-out", "--epochs", "--lr", "--limit",
-        "--eval-games", "--mc",
+        "--eval-games", "--mc", "--sgd", "--decay",
     ];
     for a in raw.iter().filter(|a| a.starts_with("--")) {
         if !KNOWN.contains(&a.as_str()) {
@@ -59,7 +61,6 @@ fn main() {
     let net_in = parse_flag("--net-in");
     let net_out = parse_flag("--net-out").unwrap_or_else(|| "models/net.bin".into());
     let epochs: u32 = parse_flag("--epochs").and_then(|s| s.parse().ok()).unwrap_or(6);
-    let lr: f32 = parse_flag("--lr").and_then(|s| s.parse().ok()).unwrap_or(0.01);
     let eval_games: u32 = parse_flag("--eval-games").and_then(|s| s.parse().ok()).unwrap_or(60);
     // TD targets are the default; --mc trains the value head on the raw final
     // outcome instead, so the two can be compared on identical data.
@@ -71,6 +72,16 @@ fn main() {
     // Cap on examples used, so two corpora of different sizes can be compared
     // at a matched number of gradient steps rather than matched epochs.
     let limit: Option<usize> = parse_flag("--limit").and_then(|s| s.parse().ok());
+    // Adam is the default now; --sgd restores what every earlier result in
+    // this project was produced with, so the two can be compared directly.
+    let use_sgd = std::env::args().any(|a| a == "--sgd");
+    let decay: f32 = parse_flag("--decay").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    // Adam's adaptive denominator already scales the step, so its usual
+    // starting point is an order of magnitude below SGD's. Defaulting them
+    // separately keeps `--lr` meaning "the sensible rate for this optimiser".
+    let lr: f32 = parse_flag("--lr")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(if use_sgd { 0.01 } else { 0.001 });
 
     let mut shard_paths: Vec<String> = Vec::new();
     let mut gamelog_paths: Vec<String> = Vec::new();
@@ -167,15 +178,30 @@ fn main() {
         }
     };
 
+    println!(
+        "optimizer: {} (lr {lr}{})",
+        if use_sgd { "SGD" } else { "Adam" },
+        if decay != 1.0 { format!(", decay {decay}/epoch") } else { String::new() }
+    );
+
+    let mut opt = if use_sgd {
+        dominion_ai::OptConfig::sgd(lr)
+    } else {
+        dominion_ai::OptConfig::adam(lr)
+    };
     for epoch in 0..epochs {
         rng.shuffle(&mut examples);
+        opt.lr = lr * decay.powi(epoch as i32);
         let mut policy_loss = 0.0f64;
         let mut value_loss = 0.0f64;
         for ex in &examples {
             let indices: Vec<usize> = ex.policy.iter().map(|(mv, _)| mv.index()).collect();
             let targets: Vec<f32> = ex.policy.iter().map(|(_, p)| *p).collect();
             let target = ex.value_target(use_td);
-            let (pl, vl) = net.train_step(&ex.features, &indices, &targets, target, lr);
+            // Adam's bias correction needs a global step count, not a
+            // per-epoch one.
+            opt.step += 1;
+            let (pl, vl) = net.train_step_with(&ex.features, &indices, &targets, target, &opt);
             policy_loss += pl as f64;
             value_loss += vl as f64;
         }

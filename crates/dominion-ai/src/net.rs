@@ -31,6 +31,58 @@ fn rand_f32(rng: &mut Rng, scale: f32) -> f32 {
     (u * 2.0 - 1.0) * scale
 }
 
+/// How weights are updated.
+///
+/// Plain SGD at a fixed learning rate was the only option here for a long
+/// time, and it is the last untested component of the system: more data, more
+/// capacity and deeper search were each measured and each changed nothing, so
+/// the optimiser is what remains.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Optimizer {
+    /// `w -= lr * g`. No state, no adaptation.
+    Sgd,
+    /// Per-parameter adaptive step sizes with momentum. Matters most when
+    /// gradients differ wildly in scale across parameters, which is exactly
+    /// this network's situation: the policy head sees a gradient on the handful
+    /// of legal moves and nothing on the other ninety-odd, while the trunk sees
+    /// dense updates from both heads at once.
+    Adam,
+}
+
+/// Optimiser settings plus the global step counter Adam's bias correction
+/// needs.
+#[derive(Clone, Copy, Debug)]
+pub struct OptConfig {
+    pub kind: Optimizer,
+    pub lr: f32,
+    /// Steps taken so far, 1-based. Bias correction is significant for the
+    /// first few thousand steps and negligible after.
+    pub step: u64,
+}
+
+impl OptConfig {
+    pub fn sgd(lr: f32) -> Self {
+        OptConfig {
+            kind: Optimizer::Sgd,
+            lr,
+            step: 1,
+        }
+    }
+    /// Adam's usual starting point is an order of magnitude below SGD's,
+    /// because the adaptive denominator already scales the step.
+    pub fn adam(lr: f32) -> Self {
+        OptConfig {
+            kind: Optimizer::Adam,
+            lr,
+            step: 1,
+        }
+    }
+}
+
+const BETA1: f32 = 0.9;
+const BETA2: f32 = 0.999;
+const EPS: f32 = 1e-8;
+
 /// A single fully-connected layer, `y = W x + b`, stored row-major
 /// (`w[o * in_dim + i]`).
 #[derive(Clone, Debug)]
@@ -39,6 +91,13 @@ struct Layer {
     b: Vec<f32>,
     in_dim: usize,
     out_dim: usize,
+    /// Adam moment estimates. Empty under SGD, allocated on first use, and
+    /// deliberately not serialised — these are optimiser state, not the model,
+    /// and checkpoints get shared between machines that may train differently.
+    m_w: Vec<f32>,
+    v_w: Vec<f32>,
+    m_b: Vec<f32>,
+    v_b: Vec<f32>,
 }
 
 impl Layer {
@@ -51,6 +110,10 @@ impl Layer {
             b: vec![0.0; out_dim],
             in_dim,
             out_dim,
+            m_w: Vec::new(),
+            v_w: Vec::new(),
+            m_b: Vec::new(),
+            v_b: Vec::new(),
         }
     }
 
@@ -67,20 +130,61 @@ impl Layer {
     /// Backprop one example: given `dL/dy`, update this layer's weights in
     /// place with plain online SGD and return `dL/dx` for the caller to keep
     /// propagating backward.
-    fn backward(&mut self, x: &[f32], grad_y: &[f32], lr: f32) -> Vec<f32> {
+    fn backward(&mut self, x: &[f32], grad_y: &[f32], opt: &OptConfig) -> Vec<f32> {
         let mut grad_x = vec![0.0f32; self.in_dim];
-        for o in 0..self.out_dim {
-            let g = grad_y[o];
-            if g == 0.0 {
-                continue;
+        match opt.kind {
+            Optimizer::Sgd => {
+                for o in 0..self.out_dim {
+                    let g = grad_y[o];
+                    if g == 0.0 {
+                        continue;
+                    }
+                    let row = &mut self.w[o * self.in_dim..(o + 1) * self.in_dim];
+                    // Two independent vectorizable passes rather than one
+                    // interleaved scalar loop: accumulate this row's
+                    // contribution to dL/dx, then apply the weight update.
+                    axpy(&mut grad_x, row, g);
+                    axpy(row, x, -opt.lr * g);
+                    self.b[o] -= opt.lr * g;
+                }
             }
-            let row = &mut self.w[o * self.in_dim..(o + 1) * self.in_dim];
-            // Two independent vectorizable passes rather than one interleaved
-            // scalar loop: accumulate this row's contribution to dL/dx, then
-            // apply the weight update.
-            axpy(&mut grad_x, row, g);
-            axpy(row, x, -lr * g);
-            self.b[o] -= lr * g;
+            Optimizer::Adam => {
+                if self.m_w.is_empty() {
+                    self.m_w = vec![0.0; self.w.len()];
+                    self.v_w = vec![0.0; self.w.len()];
+                    self.m_b = vec![0.0; self.b.len()];
+                    self.v_b = vec![0.0; self.b.len()];
+                }
+                let t = opt.step.max(1) as i32;
+                let c1 = 1.0 - BETA1.powi(t);
+                let c2 = 1.0 - BETA2.powi(t);
+                for o in 0..self.out_dim {
+                    let g = grad_y[o];
+                    if g == 0.0 {
+                        continue;
+                    }
+                    let lo = o * self.in_dim;
+                    let row = &mut self.w[lo..lo + self.in_dim];
+                    axpy(&mut grad_x, row, g);
+
+                    let mw = &mut self.m_w[lo..lo + self.in_dim];
+                    let vw = &mut self.v_w[lo..lo + self.in_dim];
+                    for i in 0..self.in_dim {
+                        let gi = g * x[i];
+                        mw[i] = BETA1 * mw[i] + (1.0 - BETA1) * gi;
+                        vw[i] = BETA2 * vw[i] + (1.0 - BETA2) * gi * gi;
+                        let mhat = mw[i] / c1;
+                        let vhat = vw[i] / c2;
+                        row[i] -= opt.lr * mhat / (vhat.sqrt() + EPS);
+                    }
+
+                    self.m_b[o] = BETA1 * self.m_b[o] + (1.0 - BETA1) * g;
+                    self.v_b[o] = BETA2 * self.v_b[o] + (1.0 - BETA2) * g * g;
+                    let mhat = self.m_b[o] / c1;
+                    let vhat = self.v_b[o] / c2;
+                    self.b[o] -= opt.lr * mhat / (vhat.sqrt() + EPS);
+                }
+            }
         }
         grad_x
     }
@@ -111,6 +215,10 @@ impl Layer {
             b,
             in_dim,
             out_dim,
+            m_w: Vec::new(),
+            v_w: Vec::new(),
+            m_b: Vec::new(),
+            v_b: Vec::new(),
         })
     }
 }
@@ -287,6 +395,24 @@ impl Net {
         value_target: f32,
         lr: f32,
     ) -> (f32, f32) {
+        self.train_step_with(
+            x,
+            legal_indices,
+            target_probs,
+            value_target,
+            &OptConfig::sgd(lr),
+        )
+    }
+
+    /// As [`Net::train_step`], with an explicit optimiser.
+    pub fn train_step_with(
+        &mut self,
+        x: &[f32; FEATURE_DIM],
+        legal_indices: &[usize],
+        target_probs: &[f32],
+        value_target: f32,
+        opt: &OptConfig,
+    ) -> (f32, f32) {
         let f = self.forward(x);
         let trains_policy = legal_indices.len() > 1;
 
@@ -317,11 +443,11 @@ impl Net {
         // With an all-zero policy gradient this still costs a pass over the
         // policy head, so skip it outright when there is nothing to learn.
         let grad_h2_from_policy = if trains_policy {
-            self.policy_head.backward(&f.h2, &grad_logits, lr)
+            self.policy_head.backward(&f.h2, &grad_logits, opt)
         } else {
             vec![0.0; f.h2.len()]
         };
-        let grad_h2_from_value = self.value_head.backward(&f.h2, &[grad_value_pre], lr);
+        let grad_h2_from_value = self.value_head.backward(&f.h2, &[grad_value_pre], opt);
         let grad_h2: Vec<f32> = grad_h2_from_policy
             .iter()
             .zip(&grad_h2_from_value)
@@ -329,9 +455,9 @@ impl Net {
             .collect();
 
         let grad_h2_pre = relu_backward(&f.h2_pre, &grad_h2);
-        let grad_h1 = self.trunk2.backward(&f.h1, &grad_h2_pre, lr);
+        let grad_h1 = self.trunk2.backward(&f.h1, &grad_h2_pre, opt);
         let grad_h1_pre = relu_backward(&f.h1_pre, &grad_h1);
-        let _ = self.trunk1.backward(x, &grad_h1_pre, lr);
+        let _ = self.trunk1.backward(x, &grad_h1_pre, opt);
 
         (policy_loss, value_loss)
     }
@@ -489,6 +615,90 @@ mod tests {
 
     fn zeros() -> [f32; FEATURE_DIM] {
         [0.0; FEATURE_DIM]
+    }
+
+    /// Adam should reach a given target in far fewer steps than SGD at the
+    /// same learning rate. That is the whole reason to have it, and it is the
+    /// property that would silently fail if the moment updates or the bias
+    /// correction were wrong.
+    #[test]
+    fn adam_converges_faster_than_sgd_at_equal_lr() {
+        let fit = |opt_kind: Optimizer, steps: u64| -> f32 {
+            let mut rng = Rng::new(7);
+            let mut net = Net::new(&mut rng);
+            let mut x = zeros();
+            x[0] = 0.5;
+            x[9] = -0.25;
+            let mut cfg = match opt_kind {
+                Optimizer::Sgd => OptConfig::sgd(0.01),
+                Optimizer::Adam => OptConfig::adam(0.01),
+            };
+            for t in 1..=steps {
+                cfg.step = t;
+                net.train_step_with(&x, &[3, 4, 5], &[0.0, 1.0, 0.0], 0.9, &cfg);
+            }
+            let probs = net.policy_over(&x, &[3, 4, 5]);
+            probs[1]
+        };
+
+        let sgd = fit(Optimizer::Sgd, 300);
+        let adam = fit(Optimizer::Adam, 300);
+        assert!(
+            adam > sgd,
+            "Adam should fit faster at the same lr: adam {adam:.4} vs sgd {sgd:.4}"
+        );
+        assert!(adam > 0.9, "Adam should get most of the way there, got {adam:.4}");
+    }
+
+    /// Bias correction is what keeps the first steps from being tiny. Without
+    /// it the moment estimates start at zero and the early updates are damped
+    /// by roughly (1 - beta), which is exactly when a short run is decided.
+    #[test]
+    fn adam_moves_meaningfully_on_the_very_first_steps() {
+        let mut rng = Rng::new(8);
+        let mut net = Net::new(&mut rng);
+        let mut x = zeros();
+        x[1] = 0.8;
+        let before = net.value(&x);
+
+        let mut cfg = OptConfig::adam(0.01);
+        for t in 1..=10 {
+            cfg.step = t;
+            net.train_step_with(&x, &[0, 1], &[0.5, 0.5], 1.0, &cfg);
+        }
+        let after = net.value(&x);
+        assert!(
+            after - before > 0.005,
+            "ten Adam steps barely moved the value head: {before:.5} -> {after:.5}"
+        );
+    }
+
+    /// Optimiser state is not part of the model. Checkpoints are shared
+    /// between machines that may train differently, so moments must not ride
+    /// along in the file — and a network that trained under Adam must still
+    /// serialize to exactly the same bytes as its weights imply.
+    #[test]
+    fn adam_state_is_not_serialized() {
+        let mut rng = Rng::new(9);
+        let mut a = Net::new(&mut rng);
+        let x = {
+            let mut v = zeros();
+            v[4] = 0.3;
+            v
+        };
+        let mut cfg = OptConfig::adam(0.01);
+        for t in 1..=50 {
+            cfg.step = t;
+            a.train_step_with(&x, &[0, 1], &[1.0, 0.0], 1.0, &cfg);
+        }
+
+        let bytes = a.to_bytes();
+        let b = Net::from_bytes(&bytes).expect("round trip");
+        assert_eq!(a.value(&x), b.value(&x));
+        assert_eq!(a.policy_over(&x, &[0, 1, 2]), b.policy_over(&x, &[0, 1, 2]));
+        // Reloaded, the moments start fresh — the same size as a network that
+        // never saw Adam.
+        assert_eq!(bytes.len(), Net::new(&mut Rng::new(1)).to_bytes().len());
     }
 
     #[test]
