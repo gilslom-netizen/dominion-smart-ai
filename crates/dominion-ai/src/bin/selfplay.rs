@@ -212,7 +212,7 @@ fn main() {
                         let kingdom = Game::random_kingdom(&mut krng);
                         let record = match &net {
                             Some(n) => {
-                                let eval = NetEvaluator { net: n };
+                                let eval = NetEvaluator::new(n);
                                 play_selfplay_game_recorded(
                                     &kingdom, 2, game_seed, &cfg, &eval, &mut rng, args.lambda,
                                 )

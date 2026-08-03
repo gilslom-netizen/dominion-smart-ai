@@ -513,7 +513,7 @@ impl<'a> Agent for NetMctsAgent<'a> {
         if self.cfg.skip_trivial && is_trivial(d) {
             return policy::default_move(state, d);
         }
-        let eval = crate::evaluator::NetEvaluator { net: self.net };
+        let eval = crate::evaluator::NetEvaluator::new(self.net);
         search_with(state, d, &self.cfg, &eval, &mut self.rng).0
     }
 
