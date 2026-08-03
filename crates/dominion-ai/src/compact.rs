@@ -66,7 +66,10 @@ pub enum CompactError {
     /// Replay reached a different position than the one recorded. This means
     /// the data and the engine disagree, and expanding it would produce
     /// plausible-looking but wrong training features.
-    ReplayDiverged { game: usize, detail: String },
+    ReplayDiverged {
+        game: usize,
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for CompactError {
@@ -283,7 +286,10 @@ pub fn expand_game(rec: &GameRecord, index: usize) -> Result<Vec<Example>, Compa
         let Some(d) = game.decision().cloned() else {
             return Err(CompactError::ReplayDiverged {
                 game: index,
-                detail: format!("game ended at ply {ply}, {} moves remained", rec.moves.len() - ply),
+                detail: format!(
+                    "game ended at ply {ply}, {} moves remained",
+                    rec.moves.len() - ply
+                ),
             });
         };
 
@@ -341,11 +347,28 @@ pub fn game_id(g: &GameRecord) -> (u64, Vec<u8>) {
 ///
 /// Returns the examples and how many duplicate games were skipped.
 pub fn read_examples_deduped(paths: &[String]) -> Result<(Vec<Example>, usize), CompactError> {
+    read_examples_deduped_capped(paths, None)
+}
+
+/// As [`read_examples_deduped`], but stopping after `max_games` distinct
+/// games.
+///
+/// The cap counts *games*, not examples, because that is the unit two corpora
+/// have to be matched on to compare how they were generated. Games vary in
+/// length, so an example-matched comparison quietly gives one side more games
+/// than the other and stops isolating the thing under test.
+pub fn read_examples_deduped_capped(
+    paths: &[String],
+    max_games: Option<usize>,
+) -> Result<(Vec<Example>, usize), CompactError> {
     let mut seen: std::collections::HashSet<(u64, Vec<u8>)> = std::collections::HashSet::new();
     let mut out = Vec::new();
     let mut skipped = 0usize;
     for path in paths {
         for (i, g) in read_games(path)?.iter().enumerate() {
+            if max_games.is_some_and(|m| seen.len() >= m) {
+                return Ok((out, skipped));
+            }
             if !seen.insert(game_id(g)) {
                 skipped += 1;
                 continue;
@@ -372,6 +395,62 @@ mod tests {
         }
     }
 
+    /// `--max-games` has to cut on whole games, because that is the unit two
+    /// corpora get matched on. Cutting on examples instead would hand one
+    /// side more games than the other and stop isolating what is under test.
+    #[test]
+    fn capping_reads_whole_games_and_the_same_ones_every_time() {
+        let dir = std::env::temp_dir().join(format!("dom-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.gamelog").to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&path);
+
+        let mut records = Vec::new();
+        for i in 0..5u64 {
+            let kingdom = dominion_core::Game::random_kingdom(&mut Rng::new(i + 1));
+            let mut rng = Rng::new(100 + i);
+            records.push(play_selfplay_game_recorded(
+                &kingdom,
+                2,
+                i,
+                &cfg(),
+                &HeuristicEvaluator,
+                &mut rng,
+                0.9,
+            ));
+        }
+        append_games(&path, &records).unwrap();
+        let paths = vec![path.clone()];
+
+        let (all, _) = read_examples_deduped(&paths).unwrap();
+        let (two, _) = read_examples_deduped_capped(&paths, Some(2)).unwrap();
+        let (five, _) = read_examples_deduped_capped(&paths, Some(5)).unwrap();
+        let (many, _) = read_examples_deduped_capped(&paths, Some(500)).unwrap();
+
+        // Capping past the end is not an error and yields everything.
+        assert_eq!(five.len(), all.len());
+        assert_eq!(many.len(), all.len());
+
+        // The cap lands exactly on a game boundary: the first two games'
+        // examples, and nothing from the third.
+        let want: usize = records
+            .iter()
+            .take(2)
+            .enumerate()
+            .map(|(i, r)| expand_game(r, i).unwrap().len())
+            .sum();
+        assert_eq!(two.len(), want, "cap did not fall on a game boundary");
+        assert!(two.len() < all.len(), "cap had no effect");
+
+        // And it is a prefix, so two runs at the same cap train on the same
+        // data rather than a random subset.
+        for (a, b) in two.iter().zip(&all) {
+            assert_eq!(a.features, b.features);
+        }
+
+        std::fs::remove_file(&path).ok();
+    }
+
     /// The whole format rests on this: expanding a compact record must
     /// reproduce what generating examples directly would have produced. If the
     /// replayed features drift from the originals, training silently learns
@@ -381,8 +460,15 @@ mod tests {
         let kingdom = dominion_core::Game::random_kingdom(&mut Rng::new(3));
 
         let mut rng = Rng::new(88);
-        let direct =
-            play_selfplay_game_with_lambda(&kingdom, 2, 5, &cfg(), &HeuristicEvaluator, &mut rng, 0.9);
+        let direct = play_selfplay_game_with_lambda(
+            &kingdom,
+            2,
+            5,
+            &cfg(),
+            &HeuristicEvaluator,
+            &mut rng,
+            0.9,
+        );
 
         let mut rng = Rng::new(88);
         let record =
@@ -395,7 +481,11 @@ mod tests {
 
         for (i, (a, b)) in expanded.iter().zip(&direct).enumerate() {
             assert_eq!(a.features, b.features, "features differ at example {i}");
-            assert_eq!(a.policy.len(), b.policy.len(), "policy length differs at {i}");
+            assert_eq!(
+                a.policy.len(),
+                b.policy.len(),
+                "policy length differs at {i}"
+            );
             for ((m1, p1), (m2, p2)) in a.policy.iter().zip(&b.policy) {
                 assert_eq!(m1, m2, "policy move differs at {i}");
                 // Probabilities go through u16 fixed point on the way out.
@@ -413,7 +503,13 @@ mod tests {
         let games: Vec<GameRecord> = (0..3)
             .map(|i| {
                 play_selfplay_game_recorded(
-                    &kingdom, 2, i, &cfg(), &HeuristicEvaluator, &mut rng, 0.9,
+                    &kingdom,
+                    2,
+                    i,
+                    &cfg(),
+                    &HeuristicEvaluator,
+                    &mut rng,
+                    0.9,
                 )
             })
             .collect();
@@ -472,7 +568,13 @@ mod tests {
         let games: Vec<GameRecord> = (0..3)
             .map(|i| {
                 play_selfplay_game_recorded(
-                    &kingdom, 2, i, &cfg(), &HeuristicEvaluator, &mut rng, 0.9,
+                    &kingdom,
+                    2,
+                    i,
+                    &cfg(),
+                    &HeuristicEvaluator,
+                    &mut rng,
+                    0.9,
                 )
             })
             .collect();
@@ -497,17 +599,34 @@ mod tests {
     fn a_record_that_cannot_replay_is_rejected() {
         let kingdom = dominion_core::Game::random_kingdom(&mut Rng::new(8));
         let mut rng = Rng::new(2);
-        let mut record =
-            play_selfplay_game_recorded(&kingdom, 2, 12, &cfg(), &HeuristicEvaluator, &mut rng, 0.9);
+        let mut record = play_selfplay_game_recorded(
+            &kingdom,
+            2,
+            12,
+            &cfg(),
+            &HeuristicEvaluator,
+            &mut rng,
+            0.9,
+        );
 
         // Corrupt a move so replay hits an illegal position.
         record.moves[4] = Move::Buy(Card::Province);
         let err = expand_game(&record, 0);
-        assert!(matches!(err, Err(CompactError::ReplayDiverged { .. })), "{err:?}");
+        assert!(
+            matches!(err, Err(CompactError::ReplayDiverged { .. })),
+            "{err:?}"
+        );
 
         // And a decision pointing past the end must be caught too.
-        let mut record2 =
-            play_selfplay_game_recorded(&kingdom, 2, 13, &cfg(), &HeuristicEvaluator, &mut rng, 0.9);
+        let mut record2 = play_selfplay_game_recorded(
+            &kingdom,
+            2,
+            13,
+            &cfg(),
+            &HeuristicEvaluator,
+            &mut rng,
+            0.9,
+        );
         record2.decisions.push(RecordedDecision {
             ply: 60_000,
             policy: vec![(Move::Done, 1.0)],
@@ -527,7 +646,10 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         std::fs::write(&path, [1u8, 2, 3, 4, 5, 6]).unwrap();
-        assert!(matches!(read_games(&path), Err(CompactError::NotACompactFile)));
+        assert!(matches!(
+            read_games(&path),
+            Err(CompactError::NotACompactFile)
+        ));
         std::fs::remove_file(&path).unwrap();
     }
 }

@@ -96,7 +96,9 @@ fn main() {
         "  (naive {:.2} games/s if you assume one-sided search and linear scaling)",
         cores as f64 / secs
     );
-    println!("  net-guided self-play (--net) is slower still: the prior costs a forward pass per node.");
+    println!(
+        "  net-guided self-play (--net) is slower still: the prior costs a forward pass per node."
+    );
 
     println!("\n== strength ({} games per matchup) ==", pairs * 2);
 

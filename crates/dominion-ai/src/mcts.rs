@@ -207,8 +207,8 @@ impl Tree {
                 let c = &self.nodes[e.child as usize];
                 (c.sum[me] / c.visits.max(1) as f32, c.visits)
             };
-            let u = exploration * e.p * (e.avail.max(1) as f32).sqrt()
-                / (1.0 + child_visits as f32);
+            let u =
+                exploration * e.p * (e.avail.max(1) as f32).sqrt() / (1.0 + child_visits as f32);
             let score = q + u;
             if score > best_score {
                 best_score = score;
@@ -609,7 +609,10 @@ mod tests {
             total > budget / 2,
             "root saw {total} visits of a {budget} budget — statistics are not being shared"
         );
-        assert!(total <= budget, "root cannot have more visits than iterations");
+        assert!(
+            total <= budget,
+            "root cannot have more visits than iterations"
+        );
     }
 
     /// A node is an information set: it holds the union of moves seen under any
@@ -646,9 +649,11 @@ mod tests {
         // Deeper nodes are reached under varying draws, so somewhere in the
         // tree availability must differ between siblings — that is the
         // information-set behaviour availability counts exist to handle.
-        let has_varying = tree.nodes.iter().skip(1).any(|n| {
-            n.edges.len() > 1 && n.edges.iter().any(|e| e.avail != n.edges[0].avail)
-        });
+        let has_varying = tree
+            .nodes
+            .iter()
+            .skip(1)
+            .any(|n| n.edges.len() > 1 && n.edges.iter().any(|e| e.avail != n.edges[0].avail));
         assert!(
             has_varying,
             "expected some deeper node to see different moves in different worlds"

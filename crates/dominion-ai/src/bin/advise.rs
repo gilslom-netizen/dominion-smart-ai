@@ -108,5 +108,8 @@ fn demo(cfg: &MctsConfig, rng: &mut Rng) {
     for line in lines.by_ref().take(5) {
         println!("{line}");
     }
-    println!("  ... ({} more moves)", rec.log.moves.len().saturating_sub(1));
+    println!(
+        "  ... ({} more moves)",
+        rec.log.moves.len().saturating_sub(1)
+    );
 }

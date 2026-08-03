@@ -32,8 +32,8 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use dominion_ai::evaluator::{HeuristicEvaluator, NetEvaluator, RolloutEvaluator};
 use dominion_ai::compact;
+use dominion_ai::evaluator::{HeuristicEvaluator, NetEvaluator, RolloutEvaluator};
 use dominion_ai::selfplay::{play_selfplay_game_recorded, DEFAULT_LAMBDA};
 use dominion_ai::{MctsConfig, Net};
 use dominion_core::{Game, Rng};
@@ -108,8 +108,15 @@ fn parse_args() -> Args {
     // An unknown flag almost always means a typo, and silently ignoring it
     // starts a multi-hour run with settings the caller did not ask for.
     const KNOWN: &[&str] = &[
-        "--tag", "--games", "--threads", "--net", "--worlds", "--iterations",
-        "--seed", "--lambda", "--rollout-leaves",
+        "--tag",
+        "--games",
+        "--threads",
+        "--net",
+        "--worlds",
+        "--iterations",
+        "--seed",
+        "--lambda",
+        "--rollout-leaves",
     ];
     for (i, a) in raw.iter().enumerate() {
         if a.starts_with('-') && !KNOWN.contains(&a.as_str()) {
@@ -127,15 +134,23 @@ fn parse_args() -> Args {
         games: get("--games").and_then(|s| s.parse().ok()).unwrap_or(200),
         threads: get("--threads")
             .and_then(|s| s.parse().ok())
-            .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)),
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1)
+            }),
         net_path: get("--net"),
         worlds: get("--worlds").and_then(|s| s.parse().ok()).unwrap_or(8),
-        iterations: get("--iterations").and_then(|s| s.parse().ok()).unwrap_or(300),
+        iterations: get("--iterations")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300),
         seed: get("--seed")
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(|| seed_from_tag(&tag)),
         tag,
-        lambda: get("--lambda").and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_LAMBDA),
+        lambda: get("--lambda")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_LAMBDA),
         rollout_leaves: raw.iter().any(|a| a == "--rollout-leaves"),
     }
 }
@@ -169,7 +184,11 @@ fn main() {
         "generating {} games on {} threads -> {out_path}{}",
         args.games,
         args.threads,
-        if net.is_some() { " (net-guided)" } else { " (heuristic-guided)" }
+        if net.is_some() {
+            " (net-guided)"
+        } else {
+            " (heuristic-guided)"
+        }
     );
     println!("TD(lambda) = {}", args.lambda);
     println!("games are flushed as they finish; this run can be stopped at any time");
@@ -213,7 +232,8 @@ fn main() {
                         if i >= games {
                             break;
                         }
-                        let game_seed = args.seed
+                        let game_seed = args
+                            .seed
                             .wrapping_mul(0x2545F4914F6CDD1D)
                             .wrapping_add(i as u64);
                         let mut rng = Rng::new(game_seed ^ 0x9E3779B97F4A7C15);
@@ -223,13 +243,25 @@ fn main() {
                             (Some(n), false) => {
                                 let eval = NetEvaluator::new(n);
                                 play_selfplay_game_recorded(
-                                    &kingdom, 2, game_seed, &cfg, &eval, &mut rng, args.lambda,
+                                    &kingdom,
+                                    2,
+                                    game_seed,
+                                    &cfg,
+                                    &eval,
+                                    &mut rng,
+                                    args.lambda,
                                 )
                             }
                             (Some(n), true) => {
                                 let eval = RolloutEvaluator { net: n };
                                 play_selfplay_game_recorded(
-                                    &kingdom, 2, game_seed, &cfg, &eval, &mut rng, args.lambda,
+                                    &kingdom,
+                                    2,
+                                    game_seed,
+                                    &cfg,
+                                    &eval,
+                                    &mut rng,
+                                    args.lambda,
                                 )
                             }
                             (None, _) => play_selfplay_game_recorded(
@@ -278,7 +310,9 @@ fn main() {
         start.elapsed().as_secs_f64(),
         size as f64 / 1e6
     );
-    println!("this file is small enough to commit — push it so other machines can train on it too.");
+    println!(
+        "this file is small enough to commit — push it so other machines can train on it too."
+    );
 }
 
 #[cfg(test)]
@@ -291,8 +325,8 @@ mod tests {
     #[test]
     fn different_tags_give_different_seeds() {
         let tags = [
-            "alice", "bob", "agent-a", "agent-b", "ccweb", "cwopus", "xdtvd7",
-            "opus5a", "cloud", "laptop", "aws", "default", "w1", "w2",
+            "alice", "bob", "agent-a", "agent-b", "ccweb", "cwopus", "xdtvd7", "opus5a", "cloud",
+            "laptop", "aws", "default", "w1", "w2",
         ];
         let seeds: Vec<u64> = tags.iter().map(|t| seed_from_tag(t)).collect();
         for (i, a) in seeds.iter().enumerate() {

@@ -30,7 +30,11 @@ train the policy/value network on self-play data
 
 usage: train [options]
 
-  --data <dir>       corpus to read (default selfplay-data)
+  --data <path>      corpus to read: a directory, or a single .gamelog file
+                     when an experiment needs one specific corpus (default
+                     selfplay-data)
+  --max-games <n>    train on only the first n games, so two corpora can be
+                     compared game-for-game rather than example-for-example
   --net-in <path>    start from this checkpoint instead of random init
   --net-out <path>   where to save (default models/net.bin)
   --epochs <n>       passes over the data (default 6)
@@ -48,8 +52,17 @@ fn main() {
         std::process::exit(0);
     }
     const KNOWN: &[&str] = &[
-        "--data", "--net-in", "--net-out", "--epochs", "--lr", "--limit",
-        "--eval-games", "--mc", "--sgd", "--decay",
+        "--data",
+        "--max-games",
+        "--net-in",
+        "--net-out",
+        "--epochs",
+        "--lr",
+        "--limit",
+        "--eval-games",
+        "--mc",
+        "--sgd",
+        "--decay",
     ];
     for a in raw.iter().filter(|a| a.starts_with("--")) {
         if !KNOWN.contains(&a.as_str()) {
@@ -60,8 +73,12 @@ fn main() {
 
     let net_in = parse_flag("--net-in");
     let net_out = parse_flag("--net-out").unwrap_or_else(|| "models/net.bin".into());
-    let epochs: u32 = parse_flag("--epochs").and_then(|s| s.parse().ok()).unwrap_or(6);
-    let eval_games: u32 = parse_flag("--eval-games").and_then(|s| s.parse().ok()).unwrap_or(60);
+    let epochs: u32 = parse_flag("--epochs")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6);
+    let eval_games: u32 = parse_flag("--eval-games")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
     // TD targets are the default; --mc trains the value head on the raw final
     // outcome instead, so the two can be compared on identical data.
     let use_td = !std::env::args().any(|a| a == "--mc");
@@ -75,7 +92,9 @@ fn main() {
     // Adam is the default now; --sgd restores what every earlier result in
     // this project was produced with, so the two can be compared directly.
     let use_sgd = std::env::args().any(|a| a == "--sgd");
-    let decay: f32 = parse_flag("--decay").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    let decay: f32 = parse_flag("--decay")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1.0);
     // Adam's adaptive denominator already scales the step, so its usual
     // starting point is an order of magnitude below SGD's. Defaulting them
     // separately keeps `--lr` meaning "the sensible rate for this optimiser".
@@ -83,9 +102,26 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(if use_sgd { 0.01 } else { 0.001 });
 
+    let max_games: Option<usize> = parse_flag("--max-games").and_then(|s| s.parse().ok());
+
     let mut shard_paths: Vec<String> = Vec::new();
     let mut gamelog_paths: Vec<String> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&data_dir) {
+    // A single file is accepted as well as a directory: a controlled
+    // comparison between two corpora needs to name one of them exactly,
+    // and pointing --data at a directory cannot express that.
+    if std::path::Path::new(&data_dir).is_file() {
+        match std::path::Path::new(&data_dir)
+            .extension()
+            .and_then(|x| x.to_str())
+        {
+            Some("shard") => shard_paths.push(data_dir.clone()),
+            Some("gamelog") => gamelog_paths.push(data_dir.clone()),
+            _ => {
+                eprintln!("{data_dir} is neither a .gamelog nor a .shard");
+                std::process::exit(1);
+            }
+        }
+    } else if let Ok(rd) = std::fs::read_dir(&data_dir) {
         for entry in rd.filter_map(|e| e.ok()) {
             let path = entry.path();
             let name = path.to_string_lossy().into_owned();
@@ -109,10 +145,11 @@ fn main() {
     // that travel between machines, so they are deduplicated by game identity:
     // two machines that generated the same game must not have it counted twice.
     if !gamelog_paths.is_empty() {
-        let (got, dupes) = compact::read_examples_deduped(&gamelog_paths).unwrap_or_else(|e| {
-            eprintln!("failed to read game logs: {e}");
-            std::process::exit(1);
-        });
+        let (got, dupes) = compact::read_examples_deduped_capped(&gamelog_paths, max_games)
+            .unwrap_or_else(|e| {
+                eprintln!("failed to read game logs: {e}");
+                std::process::exit(1);
+            });
         println!(
             "  {} game log(s): {} examples (replayed)",
             gamelog_paths.len(),
@@ -157,7 +194,11 @@ fn main() {
     }
     println!(
         "value target: {}",
-        if use_td { "TD(lambda)" } else { "Monte Carlo (final outcome)" }
+        if use_td {
+            "TD(lambda)"
+        } else {
+            "Monte Carlo (final outcome)"
+        }
     );
     // If every TD target equals its outcome, the shards predate TD targets and
     // the two modes would be identical — worth saying rather than silently
@@ -181,7 +222,11 @@ fn main() {
     println!(
         "optimizer: {} (lr {lr}{})",
         if use_sgd { "SGD" } else { "Adam" },
-        if decay != 1.0 { format!(", decay {decay}/epoch") } else { String::new() }
+        if decay != 1.0 {
+            format!(", decay {decay}/epoch")
+        } else {
+            String::new()
+        }
     );
 
     let mut opt = if use_sgd {
@@ -236,13 +281,18 @@ fn main() {
     if eval_games == 0 {
         return;
     }
-    println!("\nevaluating: NetMCTS vs Heuristic ({} games)...", eval_games * 2);
+    println!(
+        "\nevaluating: NetMCTS vs Heuristic ({} games)...",
+        eval_games * 2
+    );
     let cfg = MctsConfig {
         worlds: 4,
         iterations: 200,
         ..Default::default()
     };
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     let net_ref = &net;
     let res = run_match_parallel(
         move || Box::new(NetMctsAgent::new(cfg, net_ref)) as Box<dyn Agent>,

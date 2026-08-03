@@ -45,7 +45,15 @@ fn time_one(net: &Net, cfg: MctsConfig) -> f64 {
     t.elapsed().as_secs_f64()
 }
 
-fn report(title: &str, net: &Net, a: MctsConfig, b: MctsConfig, pairs: u32, seed: u64, cores: usize) {
+fn report(
+    title: &str,
+    net: &Net,
+    a: MctsConfig,
+    b: MctsConfig,
+    pairs: u32,
+    seed: u64,
+    cores: usize,
+) {
     let (na, nb) = (net, net);
     let res = run_match_parallel(
         move || Box::new(NetMctsAgent::new(a, na)) as Box<dyn Agent>,
@@ -63,10 +71,15 @@ fn report(title: &str, net: &Net, a: MctsConfig, b: MctsConfig, pairs: u32, seed
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let path = args.first().cloned().unwrap_or_else(|| "models/net.bin".into());
+    let path = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "models/net.bin".into());
     let pairs: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(60);
     let net = Net::load(&path).expect("load network");
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
 
     let value_head = cfg_for(8, 400, true);
     let rollout = cfg_for(8, 400, false);

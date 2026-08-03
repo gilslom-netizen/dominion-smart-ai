@@ -50,6 +50,10 @@ fn main() {
     let edge = (res.win_rate_a() - 0.5).abs();
     println!(
         "{:.1} standard errors from even",
-        if res.stderr() > 0.0 { edge / res.stderr() } else { 0.0 }
+        if res.stderr() > 0.0 {
+            edge / res.stderr()
+        } else {
+            0.0
+        }
     );
 }

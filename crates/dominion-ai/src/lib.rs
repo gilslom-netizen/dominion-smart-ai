@@ -11,9 +11,11 @@ pub mod prior;
 pub mod selfplay;
 
 pub use advise::{advise_log, advise_state, Advice};
-pub use features::{encode, FEATURE_DIM};
 pub use evaluator::{BlendedEvaluator, Evaluator, HeuristicEvaluator, NetEvaluator};
-pub use mcts::{search, search_full, search_with, MctsAgent, MctsConfig, NetMctsAgent, SearchOutcome};
 pub use example::Example;
+pub use features::{encode, FEATURE_DIM};
+pub use mcts::{
+    search, search_full, search_with, MctsAgent, MctsConfig, NetMctsAgent, SearchOutcome,
+};
 pub use net::{Net, OptConfig, Optimizer};
 pub use selfplay::play_selfplay_game;

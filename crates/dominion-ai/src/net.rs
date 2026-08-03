@@ -106,7 +106,9 @@ impl Layer {
         // through a ReLU trunk regardless of layer width.
         let scale = (2.0 / in_dim as f32).sqrt();
         Layer {
-            w: (0..in_dim * out_dim).map(|_| rand_f32(rng, scale)).collect(),
+            w: (0..in_dim * out_dim)
+                .map(|_| rand_f32(rng, scale))
+                .collect(),
             b: vec![0.0; out_dim],
             in_dim,
             out_dim,
@@ -339,10 +341,15 @@ impl Net {
 
     /// Total learnable parameters, the honest measure of capacity.
     pub fn parameters(&self) -> usize {
-        [&self.trunk1, &self.trunk2, &self.policy_head, &self.value_head]
-            .iter()
-            .map(|l| l.w.len() + l.b.len())
-            .sum()
+        [
+            &self.trunk1,
+            &self.trunk2,
+            &self.policy_head,
+            &self.value_head,
+        ]
+        .iter()
+        .map(|l| l.w.len() + l.b.len())
+        .sum()
     }
 
     fn forward(&self, x: &[f32; FEATURE_DIM]) -> Forward {
@@ -465,12 +472,7 @@ impl Net {
     pub fn to_bytes(&self) -> Vec<u8> {
         let (h1, h2) = self.hidden();
         let mut out = Vec::new();
-        for dim in [
-            FEATURE_DIM as u32,
-            h1 as u32,
-            h2 as u32,
-            MOVE_SPACE as u32,
-        ] {
+        for dim in [FEATURE_DIM as u32, h1 as u32, h2 as u32, MOVE_SPACE as u32] {
             out.extend_from_slice(&dim.to_le_bytes());
         }
         self.trunk1.write(&mut out);
@@ -647,7 +649,10 @@ mod tests {
             adam > sgd,
             "Adam should fit faster at the same lr: adam {adam:.4} vs sgd {sgd:.4}"
         );
-        assert!(adam > 0.9, "Adam should get most of the way there, got {adam:.4}");
+        assert!(
+            adam > 0.9,
+            "Adam should get most of the way there, got {adam:.4}"
+        );
     }
 
     /// Bias correction is what keeps the first steps from being tiny. Without

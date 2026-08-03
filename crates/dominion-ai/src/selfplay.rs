@@ -23,8 +23,8 @@
 use dominion_bots::policy;
 use dominion_core::{Ctx, Game, Move, Rng};
 
-use crate::evaluator::Evaluator;
 use crate::compact::{GameRecord, RecordedDecision};
+use crate::evaluator::Evaluator;
 use crate::example::Example;
 use crate::features;
 use crate::mcts::{search_full, MctsConfig};
@@ -120,7 +120,11 @@ pub fn play_selfplay_game_with_lambda(
             game.apply(d.options[0]).unwrap();
         } else if !worth_recording(&d) {
             let mv = policy::default_move(&game.state, &d);
-            let mv = if d.options.contains(&mv) { mv } else { d.options[0] };
+            let mv = if d.options.contains(&mv) {
+                mv
+            } else {
+                d.options[0]
+            };
             game.apply(mv).unwrap();
         } else {
             let outcome = search_full(&game.state, &d, cfg, eval, rng);
@@ -156,10 +160,8 @@ pub fn play_selfplay_game_with_lambda(
 
     let results = game.state.results();
 
-    let trajectory: Vec<(usize, f32)> = pending
-        .iter()
-        .map(|s| (s.player, s.search_value))
-        .collect();
+    let trajectory: Vec<(usize, f32)> =
+        pending.iter().map(|s| (s.player, s.search_value)).collect();
     let targets = lambda_returns(&trajectory, &results, lambda);
 
     pending
@@ -204,7 +206,11 @@ pub fn play_selfplay_game_recorded(
 
         let mv = if !worth_recording(&d) {
             let m = policy::default_move(&game.state, &d);
-            if d.options.contains(&m) { m } else { d.options[0] }
+            if d.options.contains(&m) {
+                m
+            } else {
+                d.options[0]
+            }
         } else {
             let outcome = search_full(&game.state, &d, cfg, eval, rng);
             // A decision the restriction collapsed to a single move carries no
@@ -239,10 +245,8 @@ pub fn play_selfplay_game_recorded(
     }
 
     let results = game.state.results();
-    let trajectory: Vec<(usize, f32)> = pending
-        .iter()
-        .map(|s| (s.player, s.search_value))
-        .collect();
+    let trajectory: Vec<(usize, f32)> =
+        pending.iter().map(|s| (s.player, s.search_value)).collect();
     let targets = lambda_returns(&trajectory, &results, lambda);
 
     GameRecord {
@@ -373,7 +377,13 @@ mod tests {
         let kingdom = Game::random_kingdom(&mut Rng::new(12));
         let mut rng = Rng::new(31);
         let examples = play_selfplay_game_with_lambda(
-            &kingdom, 2, 40, &cfg, &HeuristicEvaluator, &mut rng, 0.9,
+            &kingdom,
+            2,
+            40,
+            &cfg,
+            &HeuristicEvaluator,
+            &mut rng,
+            0.9,
         );
         assert!(!examples.is_empty());
         for ex in &examples {
@@ -386,9 +396,8 @@ mod tests {
 
         // Same for the compact recorder, which is what actually ships data.
         let mut rng = Rng::new(31);
-        let record = play_selfplay_game_recorded(
-            &kingdom, 2, 40, &cfg, &HeuristicEvaluator, &mut rng, 0.9,
-        );
+        let record =
+            play_selfplay_game_recorded(&kingdom, 2, 40, &cfg, &HeuristicEvaluator, &mut rng, 0.9);
         assert!(!record.decisions.is_empty());
         for d in &record.decisions {
             assert!(d.policy.len() > 1);
@@ -414,9 +423,19 @@ mod tests {
 
         let mut rng = Rng::new(9);
         let td = play_selfplay_game_with_lambda(
-            &kingdom, 2, 21, &cfg, &HeuristicEvaluator, &mut rng, 0.9,
+            &kingdom,
+            2,
+            21,
+            &cfg,
+            &HeuristicEvaluator,
+            &mut rng,
+            0.9,
         );
-        assert!(td.len() > 20, "expected a real trajectory, got {}", td.len());
+        assert!(
+            td.len() > 20,
+            "expected a real trajectory, got {}",
+            td.len()
+        );
         for ex in &td {
             assert!((0.0..=1.0).contains(&ex.td_target), "{}", ex.td_target);
             assert!((0.0..=1.0).contains(&ex.outcome));
@@ -430,7 +449,13 @@ mod tests {
 
         let mut rng = Rng::new(9);
         let mc = play_selfplay_game_with_lambda(
-            &kingdom, 2, 21, &cfg, &HeuristicEvaluator, &mut rng, 1.0,
+            &kingdom,
+            2,
+            21,
+            &cfg,
+            &HeuristicEvaluator,
+            &mut rng,
+            1.0,
         );
         assert_eq!(mc.len(), td.len(), "lambda must not change the game played");
         for ex in &mc {

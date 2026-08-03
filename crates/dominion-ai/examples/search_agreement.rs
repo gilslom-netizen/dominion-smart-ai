@@ -22,15 +22,25 @@ use dominion_core::{Ctx, Game, Rng};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let path = args.first().cloned().unwrap_or_else(|| "models/net.bin".into());
+    let path = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "models/net.bin".into());
     let games: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(12);
     let net = Net::load(&path).expect("load network");
     let eval = NetEvaluator::new(&net);
 
-    println!("{:>10}  {:>10}  {:>14}  {:>16}", "budget", "decisions", "search != prior", "top-move visit share");
+    println!(
+        "{:>10}  {:>10}  {:>14}  {:>16}",
+        "budget", "decisions", "search != prior", "top-move visit share"
+    );
 
     for (w, i) in [(1u32, 50u32), (4, 200), (8, 400), (16, 800)] {
-        let cfg = MctsConfig { worlds: w, iterations: i, ..Default::default() };
+        let cfg = MctsConfig {
+            worlds: w,
+            iterations: i,
+            ..Default::default()
+        };
         let mut rng = Rng::new(4242);
         let (mut decisions, mut disagreements, mut share_sum) = (0u32, 0u32, 0.0f64);
 

@@ -55,7 +55,15 @@ struct Acc {
 
 impl Acc {
     fn new() -> Self {
-        Acc { n: 0, sq: 0.0, sum_pred: 0.0, sum_out: 0.0, sum_cross: 0.0, sum_pred_sq: 0.0, sum_out_sq: 0.0 }
+        Acc {
+            n: 0,
+            sq: 0.0,
+            sum_pred: 0.0,
+            sum_out: 0.0,
+            sum_cross: 0.0,
+            sum_pred_sq: 0.0,
+            sum_out_sq: 0.0,
+        }
     }
     fn push(&mut self, pred: f32, out: f32) {
         let (p, o) = (pred as f64, out as f64);
@@ -74,8 +82,12 @@ impl Acc {
     fn corr(&self) -> f64 {
         let n = self.n.max(1) as f64;
         let cov = self.sum_cross / n - (self.sum_pred / n) * (self.sum_out / n);
-        let vp = (self.sum_pred_sq / n - (self.sum_pred / n).powi(2)).max(0.0).sqrt();
-        let vo = (self.sum_out_sq / n - (self.sum_out / n).powi(2)).max(0.0).sqrt();
+        let vp = (self.sum_pred_sq / n - (self.sum_pred / n).powi(2))
+            .max(0.0)
+            .sqrt();
+        let vo = (self.sum_out_sq / n - (self.sum_out / n).powi(2))
+            .max(0.0)
+            .sqrt();
         if vp * vo < 1e-12 {
             0.0
         } else {
@@ -89,7 +101,10 @@ impl Acc {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let path = args.first().cloned().unwrap_or_else(|| "models/net.bin".into());
+    let path = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "models/net.bin".into());
     let games: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(40);
     let net = Net::load(&path).expect("load network");
     let eval = NetEvaluator::new(&net);
@@ -147,8 +162,7 @@ fn main() {
                     iterations: 400,
                     ..play_cfg
                 };
-                let v_roll =
-                    mcts::search_full(&game.state, &d, &mid, &roll_eval, &mut rng).value;
+                let v_roll = mcts::search_full(&game.state, &d, &mid, &roll_eval, &mut rng).value;
                 pending.push((d.player, v_net, v_search, v_roll));
             }
 
@@ -214,7 +228,10 @@ fn main() {
     );
 
     println!("\nBrier by third of game (where the estimate has room to be right):");
-    println!("{:>18}  {:>8}  {:>8}  {:>8}", "estimator", "early", "middle", "late");
+    println!(
+        "{:>18}  {:>8}  {:>8}  {:>8}",
+        "estimator", "early", "middle", "late"
+    );
     for (name, accs) in [
         ("value head (raw)", &net_thirds),
         ("search 8x400", &search_thirds),

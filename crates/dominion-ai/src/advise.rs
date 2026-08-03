@@ -43,7 +43,12 @@ impl std::fmt::Display for Advice {
             "turn {} — player {} — {:?}",
             self.turn, self.decision.player, self.decision.ctx
         )?;
-        writeln!(f, "recommended: {} ({:.0}% of visits)", self.best, self.confidence() * 100.0)?;
+        writeln!(
+            f,
+            "recommended: {} ({:.0}% of visits)",
+            self.best,
+            self.confidence() * 100.0
+        )?;
         writeln!(f, "considered:")?;
         for (mv, v) in self.visits.iter().take(8) {
             writeln!(f, "  {mv:<20} {v}")?;
@@ -53,12 +58,7 @@ impl std::fmt::Display for Advice {
 }
 
 /// Search the position a state is currently parked on.
-pub fn advise_state(
-    state: &GameState,
-    d: &Decision,
-    cfg: &MctsConfig,
-    rng: &mut Rng,
-) -> Advice {
+pub fn advise_state(state: &GameState, d: &Decision, cfg: &MctsConfig, rng: &mut Rng) -> Advice {
     let (best, mut visits) = search(state, d, cfg, rng);
     visits.sort_by_key(|(_, v)| std::cmp::Reverse(*v));
     Advice {

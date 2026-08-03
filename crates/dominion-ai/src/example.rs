@@ -84,9 +84,8 @@ pub fn append_shard(path: &str, examples: &[Example]) -> std::io::Result<()> {
 /// Read every example out of one shard file.
 pub fn read_shard(path: &str) -> std::io::Result<Vec<Example>> {
     let bytes = std::fs::read(path)?;
-    parse_shard(&bytes).ok_or_else(|| {
-        std::io::Error::other(format!("{path}: not a valid shard file"))
-    })
+    parse_shard(&bytes)
+        .ok_or_else(|| std::io::Error::other(format!("{path}: not a valid shard file")))
 }
 
 /// Read and concatenate every shard matching a glob-free list of paths (the

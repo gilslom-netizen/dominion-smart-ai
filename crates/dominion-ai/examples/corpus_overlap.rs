@@ -40,7 +40,10 @@ fn main() {
         let name = path.rsplit('/').next().unwrap_or(path).to_string();
         println!("{name}: {} games ({} distinct)", games.len(), ids.len());
         if ids.len() < games.len() {
-            println!("  note: {} repeats within this file", games.len() - ids.len());
+            println!(
+                "  note: {} repeats within this file",
+                games.len() - ids.len()
+            );
         }
         corpora.push((name, ids));
     }

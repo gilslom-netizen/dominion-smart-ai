@@ -40,7 +40,10 @@ fn main() {
     // 6 epochs over the corpus this project has been training on.
     let full_run = 736_727u64 * 6;
 
-    println!("{:>12}  {:>14}  {:>18}", "network", "steps/s", "6 epochs over 737k");
+    println!(
+        "{:>12}  {:>14}  {:>18}",
+        "network", "steps/s", "6 epochs over 737k"
+    );
     for (h1, h2) in [(128usize, 64usize), (512, 256)] {
         let rate = bench(h1, h2, 40_000);
         println!(

@@ -19,16 +19,29 @@ use dominion_bots::Agent;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let path = args.first().cloned().unwrap_or_else(|| "models/net.bin".into());
+    let path = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "models/net.bin".into());
     let pairs: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(60);
     let net = Net::load(&path).expect("load network");
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
 
-    let base = MctsConfig { worlds: 4, iterations: 200, ..Default::default() };
+    let base = MctsConfig {
+        worlds: 4,
+        iterations: 200,
+        ..Default::default()
+    };
     println!("baseline: 4 worlds x 200 iterations\n");
 
     for (w, i) in [(8u32, 400u32), (16, 800)] {
-        let bigger = MctsConfig { worlds: w, iterations: i, ..Default::default() };
+        let bigger = MctsConfig {
+            worlds: w,
+            iterations: i,
+            ..Default::default()
+        };
         let factor = (w * i) as f64 / (base.worlds * base.iterations) as f64;
         let (a, b) = (&net, &net);
         let res = run_match_parallel(
