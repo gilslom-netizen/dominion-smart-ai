@@ -123,6 +123,26 @@ impl<'a> Evaluator for NetEvaluator<'a> {
     }
 }
 
+/// The network's policy as the prior, with its value head deliberately
+/// withheld so the search falls back to heuristic rollouts at every leaf.
+///
+/// The value head replaced rollouts on cost — an O(1) estimate instead of
+/// playing the game out — and that trade was never checked for accuracy.
+/// When it finally was (`value_calibration`), the rollout won by a wide
+/// margin over 1,641 positions: Brier 0.1301 against 0.1599, correlation
+/// 0.639 against 0.572, better in every third of the game and furthest
+/// ahead late, where the outcome is most decidable.
+pub struct RolloutEvaluator<'a> {
+    pub net: &'a Net,
+}
+
+impl<'a> Evaluator for RolloutEvaluator<'a> {
+    fn priors(&self, state: &GameState, d: &Decision, options: &[Move]) -> Vec<f32> {
+        NetEvaluator::new(self.net).priors(state, d, options)
+    }
+    // `leaf_value` stays at the default `None` — that is the entire point.
+}
+
 /// Blend of the heuristic prior with a network's — used while a network is
 /// still early in training and should not be trusted alone, but is worth
 /// nudging the search toward.
@@ -147,4 +167,49 @@ impl<'a> Evaluator for BlendedEvaluator<'a> {
     // Leaf value intentionally left as the default `None`: a half-trained
     // network's value head is exactly what a rollout should be verifying
     // against during early self-play, not replacing.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dominion_core::{Game, Rng};
+
+    /// The rollout and value-head evaluators must differ in *exactly* one
+    /// respect: whether a leaf gets priced by the network or by playing on.
+    /// If their priors ever diverge, every head-to-head between them is
+    /// measuring two changes at once and none of the numbers mean what the
+    /// experiment claims.
+    #[test]
+    fn rollout_and_value_head_evaluators_differ_only_at_the_leaf() {
+        let net = Net::new(&mut Rng::new(7));
+        let kingdom = Game::random_kingdom(&mut Rng::new(3));
+        let mut game = Game::new(&kingdom, 2, 11).unwrap();
+
+        let with_value = NetEvaluator::new(&net);
+        let with_rollout = RolloutEvaluator { net: &net };
+
+        let mut compared = 0;
+        for _ in 0..60 {
+            if game.is_over() {
+                break;
+            }
+            let d = game.decision().unwrap().clone();
+            if d.options.len() > 1 {
+                let a = with_value.priors(&game.state, &d, &d.options);
+                let b = with_rollout.priors(&game.state, &d, &d.options);
+                assert_eq!(a.len(), b.len());
+                for (x, y) in a.iter().zip(&b) {
+                    assert!((x - y).abs() < 1e-6, "priors diverged: {x} vs {y}");
+                }
+                compared += 1;
+            }
+            let mv = d.options[0];
+            game.apply(mv).unwrap();
+        }
+        assert!(compared > 0, "no multi-option decision was reached");
+
+        // And the leaf estimate is where they must part company.
+        assert!(with_value.leaf_value(&game.state, 0).is_some());
+        assert!(with_rollout.leaf_value(&game.state, 0).is_none());
+    }
 }

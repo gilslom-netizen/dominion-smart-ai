@@ -63,6 +63,15 @@ pub struct MctsConfig {
     /// trained. Ignored by the heuristic-prior agent, which has its own
     /// concentration built into `prior::priors`.
     pub prior_temperature: f32,
+    /// Price leaves with the network's value head (`true`) or with a
+    /// heuristic rollout (`false`).
+    ///
+    /// The rollout is much the better calibrated of the two — see
+    /// [`crate::evaluator::RolloutEvaluator`] for the measurement — but a
+    /// better-calibrated leaf estimate is not automatically a stronger
+    /// player, and the rollout costs far more per leaf. The default stays on
+    /// the value head until a head-to-head says otherwise.
+    pub use_value_head: bool,
     pub seed: u64,
 }
 
@@ -74,6 +83,7 @@ impl Default for MctsConfig {
             exploration: 2.5,
             skip_trivial: true,
             prior_temperature: 1.0,
+            use_value_head: true,
             seed: 0x5EED,
         }
     }
@@ -501,7 +511,9 @@ pub struct NetMctsAgent<'a> {
 
 impl<'a> NetMctsAgent<'a> {
     pub fn new(cfg: MctsConfig, net: &'a crate::net::Net) -> Self {
-        let label = if (cfg.prior_temperature - 1.0).abs() < 1e-6 {
+        let label = if !cfg.use_value_head {
+            format!("NetMCTS({}x{} rollout)", cfg.worlds, cfg.iterations)
+        } else if (cfg.prior_temperature - 1.0).abs() < 1e-6 {
             format!("NetMCTS({}x{})", cfg.worlds, cfg.iterations)
         } else {
             format!(
@@ -526,9 +538,16 @@ impl<'a> Agent for NetMctsAgent<'a> {
         if self.cfg.skip_trivial && is_trivial(d) {
             return policy::default_move(state, d);
         }
-        let eval =
-            crate::evaluator::NetEvaluator::with_temperature(self.net, self.cfg.prior_temperature);
-        search_with(state, d, &self.cfg, &eval, &mut self.rng).0
+        if self.cfg.use_value_head {
+            let eval = crate::evaluator::NetEvaluator::with_temperature(
+                self.net,
+                self.cfg.prior_temperature,
+            );
+            search_with(state, d, &self.cfg, &eval, &mut self.rng).0
+        } else {
+            let eval = crate::evaluator::RolloutEvaluator { net: self.net };
+            search_with(state, d, &self.cfg, &eval, &mut self.rng).0
+        }
     }
 
     fn name(&self) -> String {
