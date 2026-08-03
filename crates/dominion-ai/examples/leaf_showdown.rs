@@ -78,29 +78,37 @@ fn main() {
         t_roll / t_value.max(1e-9)
     );
 
-    report(
-        "1. game-matched — rollout 8x400 vs value head 8x400:",
-        &net,
-        rollout,
-        value_head,
-        pairs,
-        0xBEEF,
-        cores,
-    );
+    // Optional third argument selects a single arm, for re-running just the
+    // one that needs a bigger sample rather than paying for both again.
+    let arm: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    if arm == 0 || arm == 1 {
+        report(
+            "1. game-matched — rollout 8x400 vs value head 8x400:",
+            &net,
+            rollout,
+            value_head,
+            pairs,
+            0xBEEF,
+            cores,
+        );
+    }
 
     // Give the value head the iterations it can afford in the rollout's time.
     let scaled = ((400.0 * t_roll / t_value.max(1e-9)).round() as u32).clamp(400, 40_000);
-    report(
-        &format!(
-            "2. compute-matched — rollout 8x400 vs value head 8x{scaled} (same wall clock):"
-        ),
-        &net,
-        rollout,
-        cfg_for(8, scaled, true),
-        pairs,
-        0xC0FFEE,
-        cores,
-    );
+    if arm == 0 || arm == 2 {
+        report(
+            &format!(
+                "2. compute-matched — rollout 8x400 vs value head 8x{scaled} (same wall clock):"
+            ),
+            &net,
+            rollout,
+            cfg_for(8, scaled, true),
+            pairs,
+            0xC0FFEE,
+            cores,
+        );
+    }
 
     println!(
         "Same network on both sides throughout, so the leaf estimator is the\n\
