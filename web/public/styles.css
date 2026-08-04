@@ -54,7 +54,7 @@ h1 span { font-weight: 400; color: var(--muted); font-size: 15px; margin-left: 6
 .controls label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .controls label.check { flex-direction: row; align-items: center; gap: 6px; text-transform: none; font-size: 13px; letter-spacing: 0; }
 .controls input[type=number], .controls select {
-  font: inherit; font-size: 14px; padding: 5px 8px; width: 120px;
+  font: inherit; font-size: 14px; padding: 5px 8px; width: 150px;
   border: 1px solid var(--line); border-radius: 7px;
   background: var(--bg); color: var(--ink);
 }
@@ -154,3 +154,43 @@ footer {
   border-top: 1px solid var(--line); padding: 18px clamp(16px, 4vw, 40px) 40px;
   color: var(--muted); font-size: 13px; max-width: 70ch;
 }
+
+/* Secondary actions: undo, play-all, clear picks. */
+button.secondary {
+  background: transparent; color: var(--ink);
+  border: 1px solid var(--line); font-weight: 500; padding: 7px 12px;
+}
+button.secondary:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+
+.quick { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.quick button { flex: 1 1 auto; }
+
+.usedseed { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; align-self: center; }
+
+/* Kingdom picker */
+#picker {
+  margin: 0 clamp(16px, 4vw, 40px); margin-top: 14px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px 16px;
+}
+#picker summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+#picker summary::marker { color: var(--muted); }
+#picker > p { margin: 8px 0 12px; }
+.pool { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.poolcard {
+  display: flex; align-items: baseline; gap: 7px; cursor: pointer;
+  border: 1px solid var(--line); border-left: 3px solid var(--line);
+  border-radius: 7px; padding: 5px 9px; background: var(--bg); font-size: 13px;
+}
+.poolcard:hover { border-color: var(--accent); }
+/* These repeat the stripe colours because `.poolcard`'s `border` shorthand is
+   declared after the `.t-*` rules and would otherwise reset them to grey. */
+.poolcard.t-treasure { border-left-color: var(--treasure); }
+.poolcard.t-victory  { border-left-color: var(--victory); }
+.poolcard.t-action   { border-left-color: var(--action); }
+.poolcard.t-curse    { border-left-color: var(--curse); }
+.poolcard input { margin: 0; }
+.pname { font-weight: 600; }
+.pcost { color: var(--muted); font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
+.picker-actions { margin-top: 10px; }

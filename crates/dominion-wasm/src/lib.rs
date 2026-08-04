@@ -26,7 +26,7 @@ use std::cell::RefCell;
 use dominion_ai::mcts::NetMctsAgent;
 use dominion_ai::{MctsAgent, MctsConfig, Net};
 use dominion_bots::Agent;
-use dominion_core::{Card, Ctx, Game, Move, Rng};
+use dominion_core::{Card, Ctx, Game, GameState, Move, Rng, KINGDOM_CARDS};
 
 /// The trained network, compiled in. ~130KB, which is small enough that
 /// shipping it inside the module beats a second network request that can fail
@@ -42,6 +42,20 @@ struct Session {
     /// reconstructed exactly.
     history: Vec<(usize, Move)>,
     last_ai: Vec<String>,
+    /// One snapshot per human decision, for undo.
+    ///
+    /// A whole `GameState` rather than a move list, because the engine is a
+    /// continuation stack: replaying to a point means re-running every effect,
+    /// while the state is a plain value that can be cloned at any decision.
+    /// The cloned RNG is the point — restoring it means undoing and replaying
+    /// the same move gives the same shuffle, so undo cannot be used to fish
+    /// for a better draw.
+    undo: Vec<(GameState, Vec<String>)>,
+}
+
+/// Kingdom cards the player pinned before starting, filled out at random.
+thread_local! {
+    static PICKS: RefCell<Vec<Card>> = const { RefCell::new(Vec::new()) };
 }
 
 thread_local! {
@@ -206,6 +220,80 @@ fn state_json(s: &Session) -> String {
     )
 }
 
+/// Build the kingdom: every pinned card, then random ones up to ten.
+///
+/// Pinning fewer than ten is the useful case — "give me Witch and Chapel and
+/// surprise me with the rest" — so the fill is random rather than the caller
+/// having to choose all ten or none.
+fn kingdom_from_picks(rng: &mut Rng) -> Vec<Card> {
+    let picked: Vec<Card> = PICKS.with(|p| p.borrow().clone());
+    let mut kingdom: Vec<Card> = Vec::new();
+    for c in picked {
+        if kingdom.len() < 10 && !kingdom.contains(&c) {
+            kingdom.push(c);
+        }
+    }
+    let mut pool: Vec<Card> = KINGDOM_CARDS
+        .iter()
+        .copied()
+        .filter(|c| !kingdom.contains(c))
+        .collect();
+    rng.shuffle(&mut pool);
+    for c in pool {
+        if kingdom.len() == 10 {
+            break;
+        }
+        kingdom.push(c);
+    }
+    kingdom.sort_unstable();
+    kingdom
+}
+
+/// Forget every pinned card.
+#[no_mangle]
+pub extern "C" fn dom_clear_picks() {
+    PICKS.with(|p| p.borrow_mut().clear());
+}
+
+/// Pin one kingdom card into the next game's supply, by card index. Ignores
+/// anything that is not a kingdom card, and anything past ten.
+#[no_mangle]
+pub extern "C" fn dom_pick(card_index: u32) -> u32 {
+    let i = card_index as usize;
+    if i >= dominion_core::NUM_CARDS {
+        return 0;
+    }
+    let card = Card::from_idx(i);
+    if !KINGDOM_CARDS.contains(&card) {
+        return 0;
+    }
+    PICKS.with(|p| {
+        let mut b = p.borrow_mut();
+        if b.len() < 10 && !b.contains(&card) {
+            b.push(card);
+        }
+    });
+    1
+}
+
+/// The 26 kingdom cards, as JSON, so the picker does not have to duplicate the
+/// card list — and cannot drift from it.
+#[no_mangle]
+pub extern "C" fn dom_pool_json() {
+    let items: Vec<String> = KINGDOM_CARDS
+        .iter()
+        .map(|c| {
+            format!(
+                "{{\"index\":{},\"card\":\"{}\",\"cost\":{}}}",
+                *c as usize,
+                esc(&format!("{c}")),
+                c.cost()
+            )
+        })
+        .collect();
+    put(format!("[{}]", items.join(",")));
+}
+
 /// Start a game. `human_first` of 1 puts the player on the first seat.
 /// `strength` is search iterations per world; `worlds` is determinizations.
 /// Returns 1 on success, 0 if the engine refused the parameters.
@@ -213,7 +301,7 @@ fn state_json(s: &Session) -> String {
 pub extern "C" fn dom_new_game(seed: u32, human_first: u32, worlds: u32, iterations: u32) -> u32 {
     let seed = seed as u64;
     let mut krng = Rng::new(seed);
-    let kingdom = Game::random_kingdom(&mut krng);
+    let kingdom = kingdom_from_picks(&mut krng);
     let Ok(game) = Game::new(&kingdom, 2, seed) else {
         return 0;
     };
@@ -229,6 +317,7 @@ pub extern "C" fn dom_new_game(seed: u32, human_first: u32, worlds: u32, iterati
         net: Net::from_bytes(NET_BYTES),
         history: Vec::new(),
         last_ai: Vec::new(),
+        undo: Vec::new(),
     };
     SESSION.with(|s| *s.borrow_mut() = Some(session));
     1
@@ -264,11 +353,93 @@ pub extern "C" fn dom_apply(index: u32) -> u32 {
         let Some(&mv) = d.options.get(index as usize) else {
             return 0;
         };
+        // Snapshot before the move, not after, so undo lands on the choice
+        // rather than on its consequences.
+        if d.player == sess.human {
+            sess.undo.push((sess.game.state.clone(), sess.last_ai.clone()));
+            if sess.undo.len() > 300 {
+                sess.undo.remove(0);
+            }
+        }
         if sess.game.apply(mv).is_err() {
+            sess.undo.pop();
             return 0;
         }
         sess.history.push((d.player, mv));
         1
+    })
+}
+
+/// Take back the last decision, along with everything the AI did in reply.
+///
+/// Returns 1 if a move was taken back. Restoring the whole state includes the
+/// RNG, so replaying the same move produces the same shuffle — undo cannot be
+/// used to re-roll a bad draw, only to reconsider a choice.
+#[no_mangle]
+pub extern "C" fn dom_undo() -> u32 {
+    SESSION.with(|s| {
+        let mut b = s.borrow_mut();
+        let Some(sess) = b.as_mut() else { return 0 };
+        let Some((state, log)) = sess.undo.pop() else {
+            return 0;
+        };
+        sess.game.state = state;
+        sess.last_ai = log;
+        sess.history.pop();
+        1
+    })
+}
+
+/// How many decisions can still be taken back.
+#[no_mangle]
+pub extern "C" fn dom_undo_depth() -> u32 {
+    SESSION.with(|s| s.borrow().as_ref().map_or(0, |sess| sess.undo.len() as u32))
+}
+
+/// Play every Treasure in hand, as one action.
+///
+/// Playing Treasures one at a time is the single most repetitive thing in a
+/// game of Dominion and it is never a real decision in the Base set: no
+/// Treasure has a downside and nothing cares about unspent coins, which is
+/// the same fact `prior::restrict` uses to collapse the choice for the search.
+/// Returns how many were played.
+#[no_mangle]
+pub extern "C" fn dom_play_all_treasures() -> u32 {
+    SESSION.with(|s| {
+        let mut b = s.borrow_mut();
+        let Some(sess) = b.as_mut() else { return 0 };
+        let mut played = 0;
+        let mut snapshotted = false;
+        loop {
+            if sess.game.is_over() {
+                break;
+            }
+            let Some(d) = sess.game.decision().cloned() else {
+                break;
+            };
+            if d.player != sess.human || d.ctx != Ctx::BuyPhase {
+                break;
+            }
+            let Some(&mv) = d
+                .options
+                .iter()
+                .find(|m| matches!(m, Move::Play(c) if c.is_treasure()))
+            else {
+                break;
+            };
+            // One snapshot for the whole batch: undo should take back "played
+            // my Treasures", not one Copper of it.
+            if !snapshotted {
+                sess.undo.push((sess.game.state.clone(), sess.last_ai.clone()));
+                snapshotted = true;
+            }
+            if sess.game.apply(mv).is_err() {
+                break;
+            }
+            sess.history.push((d.player, mv));
+            played += 1;
+        }
+        played
     })
 }
 

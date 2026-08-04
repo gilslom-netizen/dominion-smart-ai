@@ -43,10 +43,26 @@ the search or the network changes, so `build.sh` is not optional after those.
 
 | file | role |
 |---|---|
-| `crates/dominion-wasm` | the C ABI: four calls and a JSON string |
+| `crates/dominion-wasm` | the C ABI: a handful of calls and a JSON string |
 | `public/worker.js` | owns the wasm module; runs the search off the main thread |
 | `public/app.js` | rendering and clicks only — no engine calls |
 | `public/index.html`, `styles.css` | the board |
+
+## Playing aids
+
+* **Undo** restores a whole `GameState`, RNG included. Replaying the same move
+  therefore produces the same shuffle, so undo lets you reconsider a choice
+  but cannot be used to re-roll a bad draw. It takes back the AI's reply too,
+  since taking back only your own move would leave you choosing against a
+  position that already knows what you did.
+* **Play all Treasures** is one click because it is never a real decision in
+  the Base set: no Treasure has a downside and nothing cares about unspent
+  coins. That is the same fact `prior::restrict` uses to collapse the choice
+  for the search.
+* **Choosing kingdom cards** pins as few or as many as you like and fills the
+  rest at random, so "Witch and Chapel, surprise me with the other eight" is
+  expressible. The card list comes from the engine rather than being copied
+  into the page, so it cannot drift.
 
 The worker exists because a search on the main thread freezes the page,
 including the "thinking" indicator that is there to explain the wait. It also

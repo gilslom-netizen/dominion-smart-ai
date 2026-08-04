@@ -60,6 +60,8 @@ function render(s) {
   if (s.over) {
     $('prompt').textContent = 'Game over';
     $('options').innerHTML = '';
+    $('playall').classList.add('hidden');
+    $('undo').disabled = true;
     const win = s.scores.you > s.scores.ai;
     const tie = s.scores.you === s.scores.ai;
     const el = $('result');
@@ -74,6 +76,10 @@ function render(s) {
 
   $('result').className = 'result hidden';
   $('prompt').textContent = s.prompt;
+
+  $('undo').disabled = !s.canUndo;
+  const treasureToPlay = s.options.some((o) => o.kind === 'play' && TREASURE.has(o.card));
+  $('playall').classList.toggle('hidden', !treasureToPlay);
   $('options').innerHTML = s.options
     .map((o, i) => {
       const cost = o.kind === 'buy' ? `<span class="cost">$${o.cost}</span>` : '';
@@ -92,7 +98,23 @@ function render(s) {
   }
 }
 
+$('undo').addEventListener('click', () => {
+  if (busy) return;
+  busy = true;
+  worker.postMessage({ type: 'undo' });
+});
+
+$('playall').addEventListener('click', () => {
+  if (busy) return;
+  busy = true;
+  worker.postMessage({ type: 'playAll' });
+});
+
 worker.onmessage = (e) => {
+  if (e.data.type === 'pool') {
+    renderPool(e.data.pool);
+    return;
+  }
   if (e.data.type === 'thinking') {
     $('thinking').classList.remove('hidden');
     return;
@@ -107,7 +129,11 @@ worker.onmessage = (e) => {
 function newGame() {
   const raw = $('seed').value.trim();
   const seed = raw === '' ? (Math.random() * 4294967295) >>> 0 : Number(raw) >>> 0;
-  $('seed').value = seed;
+  // Deliberately NOT written back into the input. Doing that turned the box
+  // into a fixed seed after the first game, so every later "New game" replayed
+  // the identical kingdom and opening hand. The seed used is shown separately,
+  // read-only, so a game can still be reproduced on purpose.
+  $('usedseed').textContent = 'seed ' + seed;
   busy = true;
   $('prompt').textContent = 'Dealing…';
   $('options').innerHTML = '';
@@ -115,11 +141,62 @@ function newGame() {
   worker.postMessage({
     type: 'new',
     seed,
+    picks: [...picks],
     humanFirst: $('first').checked,
     worlds: 8,
     iterations: Number($('strength').value),
   });
 }
 
+// ---- kingdom picker -------------------------------------------------------
+
+const picks = new Set();
+
+function renderPool(pool) {
+  $('pool').innerHTML = pool
+    .map(
+      (c) => `<label class="poolcard t-${typeOf(c.card)}">
+        <input type="checkbox" data-i="${c.index}" ${picks.has(c.index) ? 'checked' : ''}>
+        <span class="pname">${c.card}</span><span class="pcost">$${c.cost}</span>
+      </label>`
+    )
+    .join('');
+  for (const box of $('pool').querySelectorAll('input')) {
+    box.addEventListener('change', () => {
+      const i = Number(box.dataset.i);
+      if (box.checked) {
+        if (picks.size >= 10) {
+          box.checked = false; // ten is the whole kingdom
+          return;
+        }
+        picks.add(i);
+      } else {
+        picks.delete(i);
+      }
+      updatePickCount();
+    });
+  }
+  updatePickCount();
+}
+
+function updatePickCount() {
+  const n = picks.size;
+  $('pickcount').textContent =
+    n === 0
+      ? '— none pinned, all 10 random'
+      : n === 10
+        ? '— all 10 chosen'
+        : `— ${n} pinned, ${10 - n} random`;
+}
+
+$('clearpicks').addEventListener('click', (ev) => {
+  ev.preventDefault();
+  picks.clear();
+  for (const box of $('pool').querySelectorAll('input')) box.checked = false;
+  updatePickCount();
+});
+
+// Hide the quick buttons while the game is over or the AI is thinking.
 $('newgame').addEventListener('click', newGame);
+worker.postMessage({ type: 'pool' });
 newGame();

@@ -405,6 +405,61 @@ fn library_keeps_an_action_when_asked_to() {
     assert_eq!(count(&g.state.players[0].hand, Village), 1);
 }
 
+/// The classic Library bug: set-aside cards must not count toward the seven.
+/// If they do, a hand full of Actions stops the draw early and the card is
+/// silently much worse than it reads.
+#[test]
+fn library_set_aside_cards_do_not_count_toward_seven() {
+    let mut g = scenario(&[Library, Village], |s| {
+        s.players[0].hand = vec![Library];
+        // Drawn from the end: two Villages first, then Coppers.
+        let mut deck = vec![Copper; 9];
+        deck.push(Village);
+        deck.push(Village);
+        s.players[0].deck = deck;
+    });
+    play(&mut g, Move::Play(Library));
+    expect_ctx(&g, Ctx::LibrarySetAside);
+    play(&mut g, Move::Select(Village));
+    expect_ctx(&g, Ctx::LibrarySetAside);
+    play(&mut g, Move::Select(Village));
+
+    let pl = &g.state.players[0];
+    assert_eq!(pl.hand.len(), 7, "must still reach a full seven");
+    assert!(pl.hand.iter().all(|&c| c == Copper));
+    assert_eq!(count(&pl.discard, Village), 2);
+    assert!(pl.set_aside.is_empty());
+}
+
+/// Running out of cards must end the draw, not hang or panic. A player who
+/// has trashed their deck down to nothing is a normal late-Chapel position,
+/// not an exotic one.
+#[test]
+fn library_stops_when_the_deck_and_discard_run_out() {
+    let mut g = scenario(&[Library], |s| {
+        s.players[0].hand = vec![Library];
+        s.players[0].deck = vec![Copper, Copper];
+        s.players[0].discard.clear();
+    });
+    play(&mut g, Move::Play(Library));
+    let pl = &g.state.players[0];
+    assert_eq!(pl.hand.len(), 2, "drew everything there was");
+    assert!(g.state.pending.is_none() || g.decision().is_some());
+}
+
+/// A hand already at seven draws nothing at all.
+#[test]
+fn library_draws_nothing_when_the_hand_is_already_full() {
+    let mut g = scenario(&[Library], |s| {
+        s.players[0].hand = vec![Library, Copper, Copper, Copper, Copper, Copper, Copper, Copper];
+        s.players[0].deck = vec![Gold; 5];
+    });
+    play(&mut g, Move::Play(Library));
+    let pl = &g.state.players[0];
+    assert_eq!(count(&pl.hand, Gold), 0, "no card should have been drawn");
+    assert_eq!(pl.hand.len(), 7);
+}
+
 #[test]
 fn sentry_can_trash_one_card_and_discard_another() {
     let mut g = scenario(&[Sentry], |s| {

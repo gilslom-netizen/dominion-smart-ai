@@ -21,10 +21,16 @@ async function boot() {
 
 const ready = boot();
 
-function readState() {
-  wasm.dom_state_json();
+function readJson() {
   const bytes = new Uint8Array(wasm.memory.buffer, wasm.dom_ptr(), wasm.dom_len());
   return JSON.parse(decoder.decode(bytes));
+}
+
+function readState() {
+  wasm.dom_state_json();
+  const s = readJson();
+  s.canUndo = wasm.dom_undo_depth() > 0;
+  return s;
 }
 
 // Play AI moves until the human has a choice, or the game ends.
@@ -35,15 +41,27 @@ function runAiTurn() {
   }
 }
 
+function send() {
+  self.postMessage({ type: 'state', state: readState() });
+}
+
 self.onmessage = async (e) => {
   await ready;
   const msg = e.data;
 
+  if (msg.type === 'pool') {
+    wasm.dom_pool_json();
+    self.postMessage({ type: 'pool', pool: readJson() });
+    return;
+  }
+
   if (msg.type === 'new') {
+    wasm.dom_clear_picks();
+    for (const i of msg.picks || []) wasm.dom_pick(i);
     wasm.dom_new_game(msg.seed >>> 0, msg.humanFirst ? 1 : 0, msg.worlds, msg.iterations);
     self.postMessage({ type: 'thinking' });
     runAiTurn();
-    self.postMessage({ type: 'state', state: readState() });
+    send();
     return;
   }
 
@@ -52,7 +70,7 @@ self.onmessage = async (e) => {
     // rejected by the engine, which validates the index itself. Re-render
     // rather than treating it as an error.
     if (!wasm.dom_apply(msg.index)) {
-      self.postMessage({ type: 'state', state: readState() });
+      send();
       return;
     }
     wasm.dom_clear_log();
@@ -60,7 +78,22 @@ self.onmessage = async (e) => {
       self.postMessage({ type: 'thinking' });
     }
     runAiTurn();
-    self.postMessage({ type: 'state', state: readState() });
+    send();
+    return;
+  }
+
+  if (msg.type === 'playAll') {
+    wasm.dom_play_all_treasures();
+    send();
+    return;
+  }
+
+  if (msg.type === 'undo') {
+    // Undo lands on a human decision by construction, so the AI must not be
+    // asked to move afterwards — doing so would immediately replay the turn
+    // the player just took back.
+    wasm.dom_undo();
+    send();
     return;
   }
 };

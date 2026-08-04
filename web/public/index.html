@@ -26,8 +26,18 @@
     </label>
     <label class="check"><input id="first" type="checkbox" checked> You go first</label>
     <button id="newgame">New game</button>
+    <span id="usedseed" class="usedseed"></span>
   </div>
 </header>
+
+<details id="picker">
+  <summary>Choose kingdom cards <span id="pickcount" class="note">— none pinned, all 10 random</span></summary>
+  <p class="note">Pin as few or as many as you like; the rest are dealt at random. Pinning nothing gives a fully random kingdom.</p>
+  <div id="pool" class="pool"></div>
+  <div class="picker-actions">
+    <button id="clearpicks" class="secondary">Clear all</button>
+  </div>
+</details>
 
 <main>
   <section id="board">
@@ -69,6 +79,10 @@
     <div class="panel sticky">
       <div id="thinking" class="thinking hidden"><span class="dot"></span>the AI is searching…</div>
       <h2 id="prompt">Loading the engine…</h2>
+      <div class="quick">
+        <button id="playall" class="secondary hidden">Play all Treasures</button>
+        <button id="undo" class="secondary" disabled>Undo</button>
+      </div>
       <div id="options" class="options"></div>
       <div id="result" class="result hidden"></div>
     </div>
@@ -85,7 +99,9 @@
     No server: the engine and the search are compiled to WebAssembly and run on
     your machine. The AI is strongest at buying decisions and plays a
     money-leaning game — if you can build a working engine on the kingdom you
-    are dealt, that is where it is beatable.
+    are dealt, that is where it is beatable. Undo restores the position
+    exactly, including the shuffle, so it lets you reconsider a choice but not
+    re-roll a bad draw.
   </p>
 </footer>
 
