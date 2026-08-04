@@ -541,6 +541,47 @@ compute buying at most +29 Elo is nowhere near proportional. Deep search at
 generation time stays ruled out on cost, and "the search largely reproduces
 its prior" survives the better leaf estimate.
 
+## Why per-card synergy weights cannot express an engine
+
+The reason the AI never buys Throne Room or Vassal is not a preference for
+money. It is a filter: anything not named explicitly in `gain_preference`
+falls through to `is_action() => 300 + cost`, which is below Silver's 700, so
+those cards are never bought at any price. A deck that cannot buy Throne Room
+cannot be measured playing one.
+
+The obvious fix is to price them by what the deck already holds — Throne Room
+by how many good targets it owns, Vassal by Action density, Chapel by how much
+junk is left to trash. Measured against the ladder the heuristic scores 64.14%
+on:
+
+| ranking | avg vs the ladder |
+|---|---|
+| baseline | 64.14% |
+| + Vassal priced by Action density | 64.14% |
+| + Throne Room priced by targets | 62.64% |
+| + Chapel priced by junk | **50.12%** |
+| all three | 49.09% |
+
+Chapel alone costs fourteen points. That is not a tuning failure, it is the
+shape of the problem: buying Chapel commits the deck to being thin, the trash
+policy duly strips it to about $4 of coin, and then the buy policy goes on
+buying money with a wrecked economy. Thinning without an engine to thin *for*
+is simply worse than not thinning. Vassal's rule never fires at all — its
+Action-density condition is never met by a money deck, which is the same point
+from the other side.
+
+**A Dominion strategy is a package, and a per-card ranking function cannot
+represent one.** Every card in an engine is a bad buy until the others are
+present, so no ordering of independent per-card scores reaches the engine:
+each first step is locally wrong. This is the same wall the "wide spread of
+engine pieces" version hit at 43.5%, now with the mechanism identified rather
+than just the symptom.
+
+What that implies for the next attempt: the buy policy needs to commit to a
+plan the kingdom supports and then buy consistently for it, rather than score
+cards one at a time. That is a different shape of function, not a better set
+of weights.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`
