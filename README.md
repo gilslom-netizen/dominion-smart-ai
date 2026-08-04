@@ -582,6 +582,52 @@ plan the kingdom supports and then buy consistently for it, rather than score
 cards one at a time. That is a different shape of function, not a better set
 of weights.
 
+## How much is plan commitment worth? About a point.
+
+Since per-card weights cannot express an engine, the natural next step was a
+buy policy that commits to a plan the kingdom supports. That is a large piece
+of work, so the headroom was measured before building any of it.
+
+`plan_headroom` plays every hand-written plan a kingdom actually supports
+against the heuristic, on that kingdom, and takes the best per kingdom **with
+hindsight**. That oracle is an upper bound on what perfect plan selection
+could ever buy. Over 80 random kingdoms, 120 games per plan per kingdom:
+
+| | |
+|---|---|
+| oracle: best supported plan per kingdom | **51.05%** |
+| the heuristic (it is the opponent) | 50% by construction |
+
+| plan | avg vs heuristic | kingdoms it won |
+|---|---|---|
+| BM+Smithy | 51.15% | 23 |
+| DoubleWitch | 45.94% | 27 |
+| MilitiaMoney | 36.15% | 8 |
+| ChapelMoney | 35.38% | 1 |
+| Lab+Money | 34.40% | 2 |
+| BigMoney | 30.54% | 19 |
+| VillageSmithy | 23.37% | 0 |
+| Throne/Vassal | 15.83% | 0 |
+
+Perfect hindsight plan selection is worth **one point**. Whatever machinery
+would choose the plan, it cannot beat the oracle, so plan selection is not
+worth building — the generic ranking already plays about as well as the best
+of nine hand-written plans chosen per kingdom after the fact.
+
+A second finding fell out of it. `ChapelEngine` never appears: it needs six
+specific kingdom cards, and a random 10-of-26 kingdom contains all six about
+0.09% of the time. In 80 kingdoms it was never available to play. **An engine
+that needs six pieces is almost never on the table** — which is a structural
+argument about how often engine play is even an option, separate from how
+strong it is when it is.
+
+The caveat that applies to all of it: an oracle is only as good as its plan
+library, and this library is weakest exactly where engines live. Throne/Vassal
+scores 15.83% while being crippled by a trash policy that stops thinning at
+$4 and a priority list that cannot buy conditionally. So this rules out plan
+selection over *these* plans; it does not rule out that a competently
+expressed engine plan exists and would change the table.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`
