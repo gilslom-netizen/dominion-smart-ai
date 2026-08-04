@@ -483,6 +483,11 @@ pub fn default_move_with(
 fn throne_value(card: Card) -> i32 {
     use Card::*;
     match card {
+        // Vassal doubled is +$4 and two cards off the top of the deck played
+        // if they are Actions, which chains in an Action-dense deck. Ranking
+        // it last made Throne Room + Vassal unplayable by this policy, so the
+        // strategy could never be measured — only the refusal could.
+        Vassal => 4,
         Witch | CouncilRoom | Smithy | Laboratory | Market | Bandit => 3,
         Militia | Festival | Village | Poacher | Merchant => 2,
         _ => 1,

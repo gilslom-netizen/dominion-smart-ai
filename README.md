@@ -479,15 +479,35 @@ collapses to 12.75%, which reads as "engines are hopeless" and is really "this
 menu cannot buy anything"; adding Gold moves the identical strategy to 46%.
 The difference measured the menu, not Dominion.
 
-With that corrected, five engine variants still lose to the ladder, and lose
-badly to the 64.1% the money-leaning heuristic gets. **In Base 2E, money
-really is stronger** — which is the set's design, not an artefact here. The
-AI's preference is most likely correct rather than a failure of imagination.
+**That conclusion was then withdrawn.** A human beat the AI with exactly the
+Throne Room + Vassal line these numbers were taken to rule out, and checking
+why turned up three separate defects, each of which on its own invalidates
+the measurement:
 
-Every number above is a lower bound: a fixed priority list cannot buy
-conditionally on what it has already assembled, and the shared trash policy
-keeps about $4 of coin rather than thinning as hard as a real Chapel deck. But
-the gap to 64.1% is far too wide to close by tuning.
+1. **The menu did not contain the combo.** Adding Gold to the engine list also
+   dropped Throne Room and Vassal, so the only variant that ever held them was
+   the broken one with no economy. The 46% row is a Laboratory/Festival deck.
+2. **The shared policy would not play it.** `throne_value` ranked Vassal in
+   its lowest bucket, below every other Action, so a bot holding Throne Room
+   and Vassal doubled almost anything else. It bought the pieces and refused
+   to assemble them. Fixing that alone moved a Throne/Vassal menu from 5.5% to
+   13.9%, and left the heuristic's own ladder average unchanged at 64.1%.
+3. **The deck stays Copper-heavy.** Vassal only chains when the top of the
+   deck is an Action, and `worth_trashing` stops thinning at about $4 of coin,
+   so Vassal mostly just pays $2. Thinning harder in Action-dense decks helped
+   thin engines (21% → 30%) and hurt the best variant (46% → 37%), so it was
+   not kept — but it shows the trash policy, not the strategy, is deciding
+   these numbers.
+
+So nothing here measured whether engines are good in Base 2E. Every run
+measured whether *these bots can execute one*, and they cannot. The claim that
+money is stronger is unsupported, and the direct evidence — a human winning
+with the line — stands.
+
+It also explains the loss. The same policy is the buy heuristic, the search
+prior *and* the rollout, so the AI inherits every one of these blind spots
+three times over: it cannot value the combo, cannot build it, and cannot
+recognise it coming.
 
 The consequence for expansions is the opposite of the obvious one. The reason
 to add cards is not to teach new combos — Base already contains Chapel,

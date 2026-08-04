@@ -45,6 +45,27 @@ fn main() {
         BuyMenu::new("Festival+Lab", vec![
             r(Province), r(Gold), r(Laboratory).at_most(3), r(Festival).at_most(2),
             r(Market).at_most(2), r(Duchy).when_provinces_at_most(4), r(Silver)]),
+        // The combo this file was supposed to test and did not. "Eng+Gold"
+        // above dropped Throne Room and Vassal when Gold was added, so the
+        // only menu that ever contained them was the broken one with no
+        // economy — and its 12.75% was read as evidence about engines when it
+        // was evidence about a menu that could not afford to buy anything.
+        BuyMenu::new("Throne/Vassal", vec![
+            r(Province), r(Gold),
+            r(Chapel).at_most(1).while_provinces_above(6),
+            r(ThroneRoom).at_most(2), r(Vassal).at_most(4),
+            r(Festival).at_most(2),
+            r(Duchy).when_provinces_at_most(4), r(Silver)]),
+        BuyMenu::new("Throne/Vassal+Lab", vec![
+            r(Province), r(Gold),
+            r(Chapel).at_most(1).while_provinces_above(6),
+            r(ThroneRoom).at_most(2), r(Vassal).at_most(3),
+            r(Laboratory).at_most(2), r(Festival).at_most(2),
+            r(Duchy).when_provinces_at_most(4), r(Silver)]),
+        BuyMenu::new("Vassal/Festival", vec![
+            r(Province), r(Gold), r(Festival).at_most(3), r(Vassal).at_most(4),
+            r(ThroneRoom).at_most(1),
+            r(Duchy).when_provinces_at_most(4), r(Silver)]),
         BuyMenu::new("NoChapelEngine", vec![
             r(Province), r(Gold), r(Village).at_most(3), r(Laboratory).at_most(3),
             r(Smithy).at_most(2), r(Market).at_most(2),
