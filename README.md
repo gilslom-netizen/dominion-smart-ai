@@ -628,6 +628,42 @@ $4 and a priority list that cannot buy conditionally. So this rules out plan
 selection over *these* plans; it does not rule out that a competently
 expressed engine plan exists and would change the table.
 
+## The AI has never once tried to build an engine
+
+"Prefers money" is a claim about a mechanism, so it is worth checking as a
+fact. `buy_profile` puts every engine piece in the supply — Chapel, Festival,
+Throne Room, Vassal, Village, Laboratory — gives the AI its normal 8x400
+search, and counts what it buys over 30 games.
+
+| card | bought | offered | taken |
+|---|---|---|---|
+| Province | 113 | 136 | 83.1% |
+| Gold | 112 | 361 | 31.0% |
+| Silver | 83 | 1302 | 6.4% |
+| Militia | 48 | 879 | 5.5% |
+| Laboratory | 35 | 569 | 6.2% |
+| Market | 25 | 569 | 4.4% |
+| Vassal | 3 | 1302 | 0.2% |
+| **Chapel** | **0** | 1772 | **0.0%** |
+| **Festival** | **0** | 569 | **0.0%** |
+| **Throne Room** | **0** | 879 | **0.0%** |
+| **Village** | **0** | 1302 | **0.0%** |
+
+Four cards were offered roughly 4,500 times and bought zero times. Vassal was
+taken three times out of 1,302.
+
+The split is exactly what the code predicts. Laboratory, Market and Militia
+are named in `gain_preference` and get bought. Chapel, Festival, Throne Room
+and Village fall through to `is_action() => 300 + cost`, below Silver's 700,
+and so lose every comparison *before* the search begins — the prior never
+offers them any weight, and the search allocates its budget by the prior.
+
+This changes what the earlier results can be read to mean. The AI has never
+chosen money over an engine, because it has never once tried an engine. So
+"money is the right call for it" is untested from its side as well: there is
+no side. Whatever else is true about Base 2E, a human who builds an engine
+against this AI is playing in a lane it does not contest.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`
