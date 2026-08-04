@@ -1,84 +1,93 @@
-# Worker prompt — round 4 (rollout-leaf self-play)
+# Worker prompt — round 4 (measurement, not generation)
 
 Copy everything below the line to an agent that has git access to
 `https://github.com/gilslom-netizen/dominion-smart-ai`.
 
-**What changed since round 3, and why this round exists:** the search was
-measured running on the weaker of its two leaf estimates the entire time. The
-network's value head correlates 0.547 with the game outcome; the heuristic
-rollout it replaced correlates 0.639, and beats it in every third of the game
-(Brier 0.1301 vs 0.1599 over 1,641 positions). Switching leaves is worth
-64.17% ± 4.38 at equal search and 57.00% ± 2.21 over 500 games at equal wall
-clock. Every game in `selfplay-data/` was generated before that fix, so all
-existing training targets come from a handicapped search — which is the most
-likely reason doubling the data kept measuring flat (49.25% ± 3.54).
+**Why this round is not more self-play.** An earlier draft of this file asked
+every machine to regenerate self-play with `--rollout-leaves`, because that
+leaf estimator measured much better and is worth +101 Elo when the search
+plays. That instruction was withdrawn before being sent: two 4,900-game
+corpora were generated over the same kingdoms and seeds, differing only in
+the leaf estimator, and the networks trained on them are indistinguishable —
+49.50% ± 2.89, 0.2σ. Better games do not make better training data here, and
+they cost 4.3x to produce. Generating more of them would have burned four
+machines for a day on a measured null.
+
+What is actually scarce is **statistical power**. Nearly every result in this
+project lands at ±2.5–4.5% on 120–500 games, which is wide enough that real
+effects and noise look alike; two separate directions were chased on the
+strength of results that later moved by 2σ when re-run larger. Parallel
+machines fix exactly that, and they fix it without generating a single new
+game.
 
 ---
 
-You are contributing self-play data to a Dominion AI project. Read `README.md`
-first — particularly "What did not work", which exists so directions already
-ruled out are not re-run.
+You are helping measure a Dominion AI. Read `README.md` first — especially
+"What did not work", which exists so ruled-out directions are not re-run.
 
-## What to do
+## Setup
 
 ```sh
 git clone https://github.com/gilslom-netizen/dominion-smart-ai
 cd dominion-smart-ai
 cargo build --release
-
-# Pick a short unique tag. It seeds generation, so two tags never produce the
-# same games. Do NOT pass --seed.
-export TAG=<your-agent-name>
-
-cargo run --release --bin selfplay -- \
-  --tag $TAG --games 100000 --net models/net.bin \
-  --iterations 300 --rollout-leaves
+cargo test --release          # should be 87 passing
 ```
 
-`--rollout-leaves` is the point of this round. Do not omit it, and do not
-change `--iterations`.
+## What to run
 
-100000 is intentionally unreachable — it means "run until your time budget is
-up". Give it 3–4 hours. The file is flushed after every game, so stopping at
-any moment keeps everything finished so far. Then:
+Pick the matchup below matching your agent name, and run it at a **large**
+sample. These are the numbers currently too noisy to act on. Each takes a few
+hours; report what you get, including the ± and the sigma.
 
 ```sh
-git add selfplay-data/$TAG-*.gamelog
-git commit -m "rollout-leaf self-play from $TAG, N games"
-git push origin HEAD:main       # HEAD:main, not main — see note below
+# A — is the rollout default right at low budget too? (measured only at 8x400)
+cargo run --release --example leaf_showdown -- models/net.bin 400 1
+
+# B — the compute-matched arm at a third budget, to check it is not a
+#     coincidence of the 8x400 timing ratio
+cargo run --release --example leaf_showdown -- models/net.bin 400 2
+
+# C — the best network against the heuristic and the menu ladder, large N
+cargo run --release --bin bench -- 500
+
+# D — re-measure the two corpora's networks at 1000 games rather than 300
+#     (this is the null above; it deserves a tighter bound than 0.2σ at ±2.89)
+cargo run --release --example net_vs_net -- models/net-a.bin models/net-b.bin 500
 ```
 
-## Expectations, so you can tell normal from broken
+If your assigned letter's command needs a model file that is not in `models/`,
+say so and stop rather than substituting a different one — a comparison
+between the wrong two checkpoints is worse than no comparison.
 
-* **~4.3x slower than round 3 per game.** Rollouts play each leaf out instead
-  of pricing it with one forward pass. A quarter the games in the same time is
-  the expected outcome, not a problem to debug. Fewer, better games is the
-  entire trade.
-* Sanity-check your throughput against `cargo run --release --bin bench`, which
-  now measures the self-play rate directly (one search-vs-search game per core,
-  timed on the wall clock) rather than extrapolating. Earlier rounds reported
-  its estimate as ~2x optimistic; that is fixed, but it measures the value-head
-  path, so expect roughly a quarter of its number with `--rollout-leaves`.
-* Before pushing, run `cargo run --release --example corpus_overlap --
-  selfplay-data/*.gamelog` and confirm your file shows ~0% overlap with the
-  others. A previous round had three agents produce byte-identical corpora.
+## Reporting
+
+Write `reports/<your-tag>-findings.md` with the raw output, not a summary of
+it, and push:
+
+```sh
+git add reports/<your-tag>-findings.md
+git commit -m "<tag>: measurement round 4"
+git push origin HEAD:main       # HEAD:main, not main
+```
 
 ## Rules
 
-* **Report bugs, do not fix them.** Open an issue or write a findings file.
-  Several agents patching the same code in parallel is worse than the bugs.
-* **Never overwrite `models/net.bin`** — it is the shared baseline everyone
-  starts from. Do not run `train` at all this round.
-* **`git push origin HEAD:main`**, not `git push origin main`. If your assigned
-  branch is not literally named `main`, the second form pushes a stale local
-  `main` ref and is rejected confusingly. This cost a previous agent real time.
-* Do not delete or modify another agent's file in `selfplay-data/`.
+* **Report bugs, do not fix them.** Several agents patching in parallel is
+  worse than the bugs.
+* **Never overwrite `models/net.bin`** — the shared baseline. Do not run
+  `train` this round at all.
+* **`git push origin HEAD:main`**, not `git push origin main`. If your branch
+  is not literally named `main`, the second form pushes a stale local ref and
+  is rejected confusingly. This cost a previous agent real time.
+* Report the number you measured even when it disagrees with the number in
+  the README. That is the entire point of running it again.
 
-## Known-good checks
+## Known-good, so you do not re-report these
 
-`selfplay --help` and `train --help` print usage and exit without starting a
-run — two agents last round reported otherwise while running stale builds, so
-if you see a real run start from `--help`, rebuild before reporting it.
-Unknown flags exit 2 rather than being silently ignored, so a typo like
-`--rollout-leafs` will tell you rather than quietly running the wrong
-configuration for four hours.
+`selfplay --help` and `train --help` print usage and exit. Two agents last
+round reported otherwise while running stale builds — rebuild before
+reporting it. Unknown flags exit 2 rather than being silently ignored.
+`bench` no longer extrapolates its self-play estimate from a one-sided game
+and a linear-scaling assumption; it measures concurrent search-vs-search
+games on the wall clock.
