@@ -517,6 +517,30 @@ play, so there is nothing for the search to be rewarded for finding. Cards
 that make engines correct often enough to learn from are a prerequisite for
 engine play, not a bonus on top of it.
 
+## Underpowered measurements, four times in one day
+
+Every one of these was measured at 120 games, read as promising, and re-run
+larger:
+
+| measurement | at 120 games | re-run | |
+|---|---|---|---|
+| network vs no network | 55.42% ± 4.54 | **61.58% ± 1.99** (600) | rose |
+| rollout vs value head, equal wall clock | 59.17% ± 4.49 | 57.00% ± 2.21 (500) | held |
+| 4x search budget | 54.17% ± 4.55 | 52.00% ± 1.77 (800) | fell |
+| 16x search budget | 57.92% ± 4.51 | 54.17% ± 2.88 (300) | fell |
+
+Three of the four moved by more than a standard error, and two collapsed
+into noise. A 120-game match has a standard error near 4.5%, which is wider
+than every effect this project has found except two — so at that sample size
+most results are unreadable, in either direction.
+
+The search-scaling numbers are the substantive casualty. Fixing the leaf
+estimate did improve how the search uses compute — 16x the budget went from
+50.42% to 54.17% — but neither budget reaches significance, and 16x the
+compute buying at most +29 Elo is nowhere near proportional. Deep search at
+generation time stays ruled out on cost, and "the search largely reproduces
+its prior" survives the better leaf estimate.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`
