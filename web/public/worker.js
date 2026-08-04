@@ -30,6 +30,24 @@ async function boot() {
     const { instance } = await WebAssembly.instantiate(bytes, {});
     wasm = instance.exports;
   }
+
+  // A cached module from an older deploy is the failure this cannot afford to
+  // meet quietly: the page's JS is fresh, the module is not, and the first
+  // call to an export that did not exist yet throws somewhere the player only
+  // sees as a board that never deals. Check up front and say so instead.
+  const required = [
+    'dom_new_game', 'dom_state_json', 'dom_apply', 'dom_ai_move',
+    'dom_is_over', 'dom_human_to_move', 'dom_clear_log',
+    'dom_undo', 'dom_undo_depth', 'dom_play_all_treasures',
+    'dom_pick', 'dom_clear_picks', 'dom_pool_json', 'dom_ptr', 'dom_len',
+  ];
+  const missing = required.filter((n) => typeof wasm[n] !== 'function');
+  if (missing.length) {
+    throw new Error(
+      `the cached engine is from an older version (missing ${missing[0]}). ` +
+      `Reload with Ctrl+Shift+R to fetch the current one.`
+    );
+  }
 }
 
 // A boot failure used to leave the page sitting on "Dealing…" forever with

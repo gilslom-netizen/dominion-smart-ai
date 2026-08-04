@@ -27,6 +27,24 @@ bytes, so the MIME type no longer matters, and any remaining boot failure (a
 404, a corrupt module) is reported on the page rather than leaving it
 hanging.
 
+## Caching
+
+Every file is served `max-age=0, must-revalidate`, including the wasm.
+
+The wasm was briefly served `immutable, max-age=31536000`, which is wrong for
+a filename that never changes while its contents change every build. The
+result was the worst kind of stale cache: a browser that had loaded the site
+once kept its year-old copy of the module, while the HTML and JS updated
+normally — so fresh page code called into an old module, hit an export that
+did not exist yet, and the board simply never dealt. The production URL was
+broken this way while a preview URL, never visited before, worked fine.
+
+Immutable caching would be correct with a content-hashed filename. Until the
+build produces one, revalidation is the right trade: the module is 348KB and
+a repeat visit costs a 304, not a re-download. The worker also checks its
+exports at boot and reports a stale module by name, so this cannot recur
+silently even if a cache somewhere ignores the header.
+
 ## Deploying
 
 The site is `web/public` — plain static files, no build step.
