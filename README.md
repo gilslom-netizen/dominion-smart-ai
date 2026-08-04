@@ -390,6 +390,24 @@ against the opponents whose strength is known:
 | vs the strongest hand-written menu (Double Witch) | 78.33% ± 3.76 | +223 Elo, 7.5σ |
 | vs the same search with no network | 61.58% ± 1.99 | +82 Elo, 5.8σ |
 
+And against every menu on the benchmark ladder individually, at the cheaper
+4x200 search (`cargo run --release --example vs_ladder`):
+
+| opponent | win rate | |
+|---|---|---|
+| BigMoney | 92.92% ± 2.34 | 18.3σ |
+| BM+Smithy | 80.00% ± 3.65 | 8.2σ |
+| DoubleWitch | 77.08% ± 3.84 | 7.1σ |
+| MilitiaMoney | 87.50% ± 3.02 | 12.4σ |
+| ChapelMoney | 90.00% ± 2.74 | 14.6σ |
+| VillageSmithy | 92.08% ± 2.46 | 17.1σ |
+| **average** | **86.60%** | |
+
+Against the 64.1% the hand-written heuristic averages on the same ladder.
+Reported per menu rather than as one number because Big Money is a family, and
+an average would hide a loss to one member of it — there isn't one, but that
+was worth checking rather than assuming.
+
 The third row is the one worth reading: it is what training bought, isolated
 from the search that would run anyway. It is also a lesson in sample size.
 The same matchup over 120 games measured 55.42% ± 4.54 — 1.2σ, which reads as
