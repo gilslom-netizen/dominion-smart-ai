@@ -25,6 +25,10 @@ fn main() {
         .unwrap_or_else(|| "models/net.bin".into());
     let pairs: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(60);
     let net = Net::load(&path).expect("load network");
+    // Third argument selects one arm. The 16x arm costs about four times per
+    // game what the 4x arm does, so confirming a result at a large sample is
+    // affordable only if the arms can be run separately.
+    let arm: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -36,7 +40,10 @@ fn main() {
     };
     println!("baseline: 4 worlds x 200 iterations\n");
 
-    for (w, i) in [(8u32, 400u32), (16, 800)] {
+    for (n, (w, i)) in [(1u32, (8u32, 400u32)), (2, (16, 800))] {
+        if arm != 0 && arm != n {
+            continue;
+        }
         let bigger = MctsConfig {
             worlds: w,
             iterations: i,
