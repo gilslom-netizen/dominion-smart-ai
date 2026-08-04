@@ -31,6 +31,13 @@ fn main() {
         .unwrap_or_else(|| "models/net.bin".into());
     let games: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(30);
     let iterations: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(400);
+    // Fourth argument drops the network and steers the search with the
+    // heuristic prior instead. That prior weights the heuristic's own move 7
+    // against 1 for everything else, so engine buys are down-weighted but not
+    // excluded — where a trained network can concentrate much harder. Running
+    // both on the same kingdom shows whether training narrowed the search or
+    // merely reproduced what the heuristic already did.
+    let no_net = args.get(3).map(|s| s == "--heuristic").unwrap_or(false);
     let net = Net::load(&path).expect("load network");
 
     use Card::*;
@@ -52,7 +59,9 @@ fn main() {
 
     for g in 0..games {
         let mut game = Game::new(&kingdom, 2, g as u64 * 31 + 7).unwrap();
-        let mut ai = NetMctsAgent::new(cfg, &net);
+        let mut net_ai = NetMctsAgent::new(cfg, &net);
+        let mut heur_ai = dominion_ai::MctsAgent::new(cfg);
+        let ai: &mut dyn Agent = if no_net { &mut heur_ai } else { &mut net_ai };
         let mut opp = HeuristicBot;
         let ai_seat = (g % 2) as usize;
 
@@ -82,8 +91,10 @@ fn main() {
     }
 
     println!(
-        "{games} games on a kingdom containing every engine piece, {}x{} search\n",
-        cfg.worlds, cfg.iterations
+        "{games} games on a kingdom containing every engine piece, {}x{} search, prior: {}\n",
+        cfg.worlds,
+        cfg.iterations,
+        if no_net { "heuristic" } else { "network" }
     );
     println!("{:<14} {:>8} {:>10} {:>10}", "card", "bought", "offered", "taken");
     let mut rows: Vec<(Card, u32, u32)> = kingdom

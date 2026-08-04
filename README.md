@@ -664,6 +664,23 @@ chosen money over an engine, because it has never once tried an engine. So
 no side. Whatever else is true about Base 2E, a human who builds an engine
 against this AI is playing in a lane it does not contest.
 
+Running the same probe with the network dropped — the search steered by the
+heuristic prior, which weights the heuristic's move 7 against 1 rather than
+excluding anything — gives the same zeroes: Chapel 0 of 1699, Throne Room 0 of
+838, Village 0 of 1235, Festival 0 of 551. **Training did not narrow the
+search; it reproduced the heuristic exactly.** That rules out the
+self-distillation loop as the cause and pins the whole effect on
+`gain_preference`.
+
+The chain is now closed end to end, each link measured rather than assumed:
+the ranking puts engine cards below Silver, so the heuristic never buys them;
+the prior therefore gives them a seventh of the weight; rollouts run the same
+policy, so an engine deck's future is simulated as more money-buying and its
+`Q` comes back bad; the search rejects the buy; and the network trains on that
+and reproduces it. The last link adds nothing, which is why fixing the
+network was never going to help — and why eight training-side experiments
+measured zero.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`
