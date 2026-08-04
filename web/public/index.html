@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dominion AI — play the search</title>
+<meta name="description" content="Play Dominion (Base 2E) against an ISMCTS search with a trained policy network, running entirely in your browser.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>👑</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <div class="title">
+    <h1>Dominion <span>Base 2E</span></h1>
+    <p class="sub">ISMCTS + a trained policy network, running entirely in your browser.</p>
+  </div>
+  <div class="controls">
+    <label>Seed <input id="seed" type="number" value="" placeholder="random"></label>
+    <label>Thinking
+      <select id="strength">
+        <option value="200">Fast</option>
+        <option value="400" selected>Normal</option>
+        <option value="1000">Slow &amp; stronger</option>
+      </select>
+    </label>
+    <label class="check"><input id="first" type="checkbox" checked> You go first</label>
+    <button id="newgame">New game</button>
+  </div>
+</header>
+
+<main>
+  <section id="board">
+    <div class="panel supply-panel">
+      <h2>Supply <span id="empty-note" class="note"></span></h2>
+      <div id="supply" class="supply"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Your hand</h2>
+      <div id="hand" class="cards"></div>
+      <div id="inplay-wrap" class="hidden">
+        <h3>In play</h3>
+        <div id="inplay" class="cards"></div>
+      </div>
+      <div class="stats">
+        <div><b id="st-actions">1</b><span>actions</span></div>
+        <div><b id="st-buys">1</b><span>buys</span></div>
+        <div><b id="st-coins">$0</b><span>coins</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Decks <span class="note">every card either player owns is public in Dominion</span></h2>
+      <div class="decks">
+        <div>
+          <h3>Yours <em id="you-meta"></em></h3>
+          <div id="you-all" class="cards small"></div>
+        </div>
+        <div>
+          <h3>The AI's <em id="ai-meta"></em></h3>
+          <div id="ai-all" class="cards small"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside id="side">
+    <div class="panel sticky">
+      <div id="thinking" class="thinking hidden"><span class="dot"></span>the AI is searching…</div>
+      <h2 id="prompt">Loading the engine…</h2>
+      <div id="options" class="options"></div>
+      <div id="result" class="result hidden"></div>
+    </div>
+
+    <div class="panel">
+      <h2>The AI played</h2>
+      <ol id="ailog" class="ailog"><li class="muted">nothing yet</li></ol>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <p>
+    No server: the engine and the search are compiled to WebAssembly and run on
+    your machine. The AI is strongest at buying decisions and plays a
+    money-leaning game — if you can build a working engine on the kingdom you
+    are dealt, that is where it is beatable.
+  </p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

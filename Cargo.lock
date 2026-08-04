@@ -20,3 +20,12 @@ dependencies = [
 [[package]]
 name = "dominion-core"
 version = "0.1.0"
+
+[[package]]
+name = "dominion-wasm"
+version = "0.1.0"
+dependencies = [
+ "dominion-ai",
+ "dominion-bots",
+ "dominion-core",
+]

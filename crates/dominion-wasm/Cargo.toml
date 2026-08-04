@@ -1,0 +1,17 @@
+[package]
+name = "dominion-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# A plain C ABI rather than wasm-bindgen: the whole interface is four numbers
+# and a JSON string, so the generated glue would be more machinery than the
+# interface it wraps — and it keeps the build to `cargo build --target
+# wasm32-unknown-unknown`, with no wasm-pack or npm toolchain to install.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dominion-core = { path = "../dominion-core" }
+dominion-bots = { path = "../dominion-bots" }
+dominion-ai = { path = "../dominion-ai" }
