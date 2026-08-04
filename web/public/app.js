@@ -110,7 +110,23 @@ $('playall').addEventListener('click', () => {
   worker.postMessage({ type: 'playAll' });
 });
 
+function fatal(message) {
+  busy = true;
+  $('thinking').classList.add('hidden');
+  $('prompt').textContent = 'The engine failed to start';
+  $('options').innerHTML = '';
+  const el = $('result');
+  el.className = 'result lose';
+  el.textContent = message;
+}
+
+worker.onerror = (e) => fatal(e.message || 'the worker could not be loaded');
+
 worker.onmessage = (e) => {
+  if (e.data.type === 'fatal') {
+    fatal(e.data.message);
+    return;
+  }
   if (e.data.type === 'pool') {
     renderPool(e.data.pool);
     return;

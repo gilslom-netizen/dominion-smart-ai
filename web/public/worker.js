@@ -15,11 +15,29 @@ let decoder = new TextDecoder();
 
 async function boot() {
   const res = await fetch('dominion_wasm.wasm');
-  const { instance } = await WebAssembly.instantiateStreaming(res, {});
-  wasm = instance.exports;
+  if (!res.ok) throw new Error(`could not fetch the engine: HTTP ${res.status}`);
+
+  // instantiateStreaming refuses anything not served as `application/wasm`,
+  // and plenty of static hosts send `application/octet-stream` for .wasm
+  // regardless of what the config asks for. That is not worth failing over:
+  // buffer the bytes and compile them instead. Streaming stays the fast path
+  // where the host cooperates.
+  try {
+    const { instance } = await WebAssembly.instantiateStreaming(res.clone(), {});
+    wasm = instance.exports;
+  } catch (streamErr) {
+    const bytes = await res.arrayBuffer();
+    const { instance } = await WebAssembly.instantiate(bytes, {});
+    wasm = instance.exports;
+  }
 }
 
-const ready = boot();
+// A boot failure used to leave the page sitting on "Dealing…" forever with
+// nothing in the console the player would ever look at. Report it instead.
+const ready = boot().catch((err) => {
+  self.postMessage({ type: 'fatal', message: String(err && err.message ? err.message : err) });
+  throw err;
+});
 
 function readJson() {
   const bytes = new Uint8Array(wasm.memory.buffer, wasm.dom_ptr(), wasm.dom_len());

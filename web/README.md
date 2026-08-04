@@ -16,6 +16,17 @@ ours.
 The trade is a 335KB module, downloaded once and cached immutably, which
 includes the trained network (`models/net.bin`) compiled in.
 
+## If the page sits on "Dealing…"
+
+That was a real failure mode and it can no longer happen silently. The module
+is loaded with `instantiateStreaming`, which refuses any response not served
+as `application/wasm` — and a static host sending `application/octet-stream`
+for `.wasm` is common enough that `vercel.json` asking for the right type is
+not sufficient. The worker now falls back to buffering and compiling the
+bytes, so the MIME type no longer matters, and any remaining boot failure (a
+404, a corrupt module) is reported on the page rather than leaving it
+hanging.
+
 ## Deploying
 
 The site is `web/public` — plain static files, no build step.
