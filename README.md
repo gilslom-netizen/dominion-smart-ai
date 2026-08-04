@@ -379,6 +379,28 @@ from a mediocre search" is no longer a sufficient explanation for why more
 data measures flat — the search was made materially stronger and the trained
 result did not move.
 
+## Where it stands
+
+`cargo run --release --example standing` measures the shipping configuration
+against the opponents whose strength is known:
+
+| | win rate | |
+|---|---|---|
+| vs the heuristic it uses as prior and rollout | 81.25% ± 3.56 | +255 Elo, 8.8σ |
+| vs the strongest hand-written menu (Double Witch) | 78.33% ± 3.76 | +223 Elo, 7.5σ |
+| vs the same search with no network | 61.58% ± 1.99 | +82 Elo, 5.8σ |
+
+The third row is the one worth reading: it is what training bought, isolated
+from the search that would run anyway. It is also a lesson in sample size.
+The same matchup over 120 games measured 55.42% ± 4.54 — 1.2σ, which reads as
+"the network cannot be shown to help at all" and is the wrong conclusion. Six
+hundred games put it at 5.8σ. Both measurements are consistent; the first was
+simply too noisy to act on, and acting on it anyway is the mistake this
+project has made more than once.
+
+**No number here is against the app's Hard bot.** Nothing in this project has
+ever been measured against it, so the original target remains unquantified.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`
