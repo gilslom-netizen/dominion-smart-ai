@@ -59,8 +59,7 @@ fn main() {
             if da.ply != db.ply {
                 break;
             }
-            let pa: HashMap<usize, f32> =
-                da.policy.iter().map(|(m, p)| (m.index(), *p)).collect();
+            let pa: HashMap<usize, f32> = da.policy.iter().map(|(m, p)| (m.index(), *p)).collect();
             let mut l1 = 0.0f64;
             for (m, p) in &db.policy {
                 let other = pa.get(&m.index()).copied().unwrap_or(0.0);
@@ -71,7 +70,11 @@ fn main() {
         }
     }
 
-    println!("{} games in a, {} in b, {paired} paired by (seed, kingdom)", a.len(), b.len());
+    println!(
+        "{} games in a, {} in b, {paired} paired by (seed, kingdom)",
+        a.len(),
+        b.len()
+    );
     if paired == 0 {
         println!("\nNothing to compare — these corpora cover different games.");
         return;

@@ -22,10 +22,11 @@ engine work rather than AI work.
 ## Commands
 
 ```sh
-cargo test                                  # 77 tests
+cargo test                                  # 87 tests
 cargo run --release --bin ladder            # heuristic round robin
 cargo run --release --bin bench             # machine check + search strength
 cargo run --release --bin advise -- --demo  # ask the AI about a position
+cargo run --release --bin play              # play a game against it yourself
 
 cargo run --release --bin selfplay -- --games 3000 --tag <name> --net models/net.bin
 cargo run --release --bin train -- --net-in models/net.bin --net-out models/net.bin
