@@ -46,48 +46,58 @@ fn main() {
         }
     );
 
+    // Optional third argument runs one matchup only, for re-measuring the one
+    // that needs a larger sample without paying for all three.
+    let arm: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+
     let net_ref = &net;
     let show = |title: &str, res: dominion_bots::match_runner::MatchResult| {
         let sigma = (res.win_rate_a() - 0.5).abs() / res.stderr().max(1e-9);
         println!("{title}\n  {res}\n  {sigma:.1} standard errors from even\n");
     };
 
-    show(
-        "vs the heuristic it uses as prior and rollout:",
-        run_match_parallel(
-            move || Box::new(NetMctsAgent::new(cfg, net_ref)) as Box<dyn Agent>,
-            || Box::new(HeuristicBot) as Box<dyn Agent>,
-            pairs,
-            0xBEEF,
-            &Kingdoms::Random,
-            cores,
-        ),
-    );
+    if arm == 0 || arm == 1 {
+        show(
+            "vs the heuristic it uses as prior and rollout:",
+            run_match_parallel(
+                move || Box::new(NetMctsAgent::new(cfg, net_ref)) as Box<dyn Agent>,
+                || Box::new(HeuristicBot) as Box<dyn Agent>,
+                pairs,
+                0xBEEF,
+                &Kingdoms::Random,
+                cores,
+            ),
+        );
+    }
 
     let menu = double_witch();
-    show(
-        "vs the strongest hand-written menu (Double Witch):",
-        run_match_parallel(
-            move || Box::new(NetMctsAgent::new(cfg, net_ref)) as Box<dyn Agent>,
-            move || Box::new(MenuBot::new(double_witch())) as Box<dyn Agent>,
-            pairs,
-            0xC0FFEE,
-            &Kingdoms::RandomWith(required_kingdom(&menu)),
-            cores,
-        ),
-    );
+    if arm == 0 || arm == 2 {
+        show(
+            "vs the strongest hand-written menu (Double Witch):",
+            run_match_parallel(
+                move || Box::new(NetMctsAgent::new(cfg, net_ref)) as Box<dyn Agent>,
+                move || Box::new(MenuBot::new(double_witch())) as Box<dyn Agent>,
+                pairs,
+                0xC0FFEE,
+                &Kingdoms::RandomWith(required_kingdom(&menu)),
+                cores,
+            ),
+        );
+    }
 
-    show(
-        "vs the same search with no network (what training bought):",
-        run_match_parallel(
-            move || Box::new(NetMctsAgent::new(cfg, net_ref)) as Box<dyn Agent>,
-            move || Box::new(MctsAgent::new(cfg)) as Box<dyn Agent>,
-            pairs,
-            0xD00D,
-            &Kingdoms::Random,
-            cores,
-        ),
-    );
+    if arm == 0 || arm == 3 {
+        show(
+            "vs the same search with no network (what training bought):",
+            run_match_parallel(
+                move || Box::new(NetMctsAgent::new(cfg, net_ref)) as Box<dyn Agent>,
+                move || Box::new(MctsAgent::new(cfg)) as Box<dyn Agent>,
+                pairs,
+                0xD00D,
+                &Kingdoms::Random,
+                cores,
+            ),
+        );
+    }
 
     println!(
         "No number here is against the app's Hard bot. Nothing in this project\n\
