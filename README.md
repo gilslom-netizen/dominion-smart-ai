@@ -434,6 +434,51 @@ target is the search's visit distribution, and 16x the search budget changes
 the chosen move in 5.7% of decisions. The network is largely being taught
 what it already says.
 
+## Does it refuse to build engines, or is money simply right?
+
+The search prefers money on every kingdom and never assembles a thin-deck
+engine. There is a structural reason it could not: Chapel costs money now and
+repays five to eight turns later, the tree reaches two or three buys deep, and
+everything past the tree is priced by a rollout that goes on buying money. The
+evaluator cannot see an engine's payoff, so more search *reinforces* the
+refusal rather than curing it.
+
+That story is tidy enough to act on, which is why it was worth measuring
+first. Engine-leaning menus, scored against the same six-menu ladder the
+heuristic's 64.1% comes from:
+
+| menu | avg vs the ladder |
+|---|---|
+| Chapel engine, no Gold | 12.75% |
+| the same, with Gold | 46.00% |
+| Laboratory + money | 38.89% |
+| Festival + Laboratory | 36.22% |
+| Village/Smithy engine, no Chapel | 19.69% |
+| *the money-leaning heuristic* | *64.1%* |
+
+The first row nearly produced the wrong conclusion. A menu without Gold
+collapses to 12.75%, which reads as "engines are hopeless" and is really "this
+menu cannot buy anything"; adding Gold moves the identical strategy to 46%.
+The difference measured the menu, not Dominion.
+
+With that corrected, five engine variants still lose to the ladder, and lose
+badly to the 64.1% the money-leaning heuristic gets. **In Base 2E, money
+really is stronger** — which is the set's design, not an artefact here. The
+AI's preference is most likely correct rather than a failure of imagination.
+
+Every number above is a lower bound: a fixed priority list cannot buy
+conditionally on what it has already assembled, and the shared trash policy
+keeps about $4 of coin rather than thinning as hard as a real Chapel deck. But
+the gap to 64.1% is far too wide to close by tuning.
+
+The consequence for expansions is the opposite of the obvious one. The reason
+to add cards is not to teach new combos — Base already contains Chapel,
+Festival, Throne Room and Vassal, so the combos are present and unused. It is
+that Base contains too few positions where building an engine is the *correct*
+play, so there is nothing for the search to be rewarded for finding. Cards
+that make engines correct often enough to learn from are a prerequisite for
+engine play, not a bonus on top of it.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`
