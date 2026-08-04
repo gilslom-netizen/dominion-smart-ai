@@ -29,21 +29,25 @@ hanging.
 
 ## Caching
 
-Every file is served `max-age=0, must-revalidate`, including the wasm.
+The module's filename carries a content hash
+(`dominion_wasm.<hash>.wasm`), written by `build.sh` along with the
+`engine-version.js` the worker reads it from. HTML, CSS and JS revalidate;
+the hashed module is immutable, which is now safe because a rebuild produces
+a different URL.
 
-The wasm was briefly served `immutable, max-age=31536000`, which is wrong for
-a filename that never changes while its contents change every build. The
-result was the worst kind of stale cache: a browser that had loaded the site
-once kept its year-old copy of the module, while the HTML and JS updated
-normally — so fresh page code called into an old module, hit an export that
-did not exist yet, and the board simply never dealt. The production URL was
-broken this way while a preview URL, never visited before, worked fine.
+That indirection is not decoration — it fixes a bug that got shipped. The
+module was first served under a fixed name with `immutable,
+max-age=31536000`, so browsers *and the CDN* kept a year-old copy while the
+HTML and JS updated normally. Fresh page code then called an export the old
+module did not have, and the board never dealt. Only the production URL was
+affected; a preview URL that had never cached anything worked, which is the
+classic "works for me". A hard reload did not fix it either, because
+Ctrl+Shift+R bypasses the browser cache and not the CDN. A new URL per build
+is the only version of this that cannot go wrong.
 
-Immutable caching would be correct with a content-hashed filename. Until the
-build produces one, revalidation is the right trade: the module is 348KB and
-a repeat visit costs a 304, not a re-download. The worker also checks its
-exports at boot and reports a stale module by name, so this cannot recur
-silently even if a cache somewhere ignores the header.
+The worker also verifies the module's exports at boot and names the missing
+one, so if a stale module ever does reach it, the page says so instead of
+hanging.
 
 ## Deploying
 
