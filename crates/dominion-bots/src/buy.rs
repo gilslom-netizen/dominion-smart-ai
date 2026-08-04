@@ -218,6 +218,39 @@ pub fn village_smithy() -> BuyMenu {
 }
 
 /// Every named strategy, for round-robin benchmarking.
+/// A thin-deck engine: Chapel down to almost nothing, then Festival for
+/// actions and buys, draw, and a Throne Room / Vassal chain.
+///
+/// This exists to answer a question rather than to compete: the search
+/// consistently prefers money, and there are two very different reasons that
+/// could be right. Either the engine is genuinely better and the search
+/// cannot see past Chapel's negative short-term value, or money really is the
+/// stronger line in Base 2E and the preference is correct. Playing this menu
+/// against the ladder separates them.
+///
+/// A fixed priority list is a poor pilot for an engine — a real one buys
+/// conditionally on what it has already assembled, and this cannot — so treat
+/// a weak result as a weak *lower bound* on the engine's strength, not as
+/// proof the engine is bad.
+pub fn chapel_engine() -> BuyMenu {
+    use Card::*;
+    BuyMenu::new(
+        "ChapelEngine",
+        vec![
+            r(Province).when_provinces_at_most(8),
+            r(Chapel).at_most(1).while_provinces_above(6),
+            r(Festival).at_most(3),
+            r(Laboratory).at_most(3),
+            r(Market).at_most(2),
+            r(ThroneRoom).at_most(1),
+            r(Vassal).at_most(2),
+            r(Duchy).when_provinces_at_most(4),
+            r(Estate).when_provinces_at_most(2),
+            r(Silver),
+        ],
+    )
+}
+
 pub fn ladder() -> Vec<BuyMenu> {
     vec![
         big_money(),
