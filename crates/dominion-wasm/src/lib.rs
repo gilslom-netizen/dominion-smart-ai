@@ -26,7 +26,7 @@ use std::cell::RefCell;
 use dominion_ai::mcts::NetMctsAgent;
 use dominion_ai::{MctsAgent, MctsConfig, Net};
 use dominion_bots::Agent;
-use dominion_core::{Card, Ctx, Game, GameState, Move, Rng, KINGDOM_CARDS};
+use dominion_core::{Card, Ctx, Game, GameLog, GameState, Move, Rng, KINGDOM_CARDS};
 
 /// The trained network, compiled in. ~130KB, which is small enough that
 /// shipping it inside the module beats a second network request that can fail
@@ -35,6 +35,10 @@ static NET_BYTES: &[u8] = include_bytes!("../../../models/net.bin");
 
 struct Session {
     game: Game,
+    /// Kept alongside the game because a `GameLog` needs them to replay, and
+    /// the whole point of recording is that the log reconstructs the game.
+    kingdom: Vec<Card>,
+    seed: u64,
     human: usize,
     cfg: MctsConfig,
     net: Option<Net>,
@@ -276,18 +280,44 @@ pub extern "C" fn dom_pick(card_index: u32) -> u32 {
     1
 }
 
-/// The 26 kingdom cards, as JSON, so the picker does not have to duplicate the
-/// card list — and cannot drift from it.
+/// Every card, with cost, types and rules text, so the page never keeps its
+/// own copy of any of it.
+///
+/// One call rather than one per card: the whole table is a few kilobytes and
+/// never changes during a game, and a lookup per right-click would put a
+/// worker round trip in front of a tooltip.
 #[no_mangle]
-pub extern "C" fn dom_pool_json() {
-    let items: Vec<String> = KINGDOM_CARDS
+pub extern "C" fn dom_cards_json() {
+    let items: Vec<String> = dominion_core::ALL_CARDS
         .iter()
         .map(|c| {
+            let mut kinds: Vec<&str> = Vec::new();
+            if c.is_action() {
+                kinds.push("Action");
+            }
+            if c.is_treasure() {
+                kinds.push("Treasure");
+            }
+            if c.is_victory() {
+                kinds.push("Victory");
+            }
+            if c.is_curse() {
+                kinds.push("Curse");
+            }
+            if c.is_attack() {
+                kinds.push("Attack");
+            }
+            if c.is_reaction() {
+                kinds.push("Reaction");
+            }
             format!(
-                "{{\"index\":{},\"card\":\"{}\",\"cost\":{}}}",
+                "{{\"index\":{},\"card\":\"{}\",\"cost\":{},\"kingdom\":{},\"types\":\"{}\",\"text\":\"{}\"}}",
                 *c as usize,
                 esc(&format!("{c}")),
-                c.cost()
+                c.cost(),
+                KINGDOM_CARDS.contains(c),
+                kinds.join(" – "),
+                esc(c.text())
             )
         })
         .collect();
@@ -312,6 +342,8 @@ pub extern "C" fn dom_new_game(seed: u32, human_first: u32, worlds: u32, iterati
     };
     let session = Session {
         game,
+        kingdom: kingdom.clone(),
+        seed,
         human: if human_first == 1 { 0 } else { 1 },
         cfg,
         net: Net::from_bytes(NET_BYTES),
@@ -505,6 +537,51 @@ pub extern "C" fn dom_human_to_move() -> u32 {
             _ => 0,
         }
     })
+}
+
+/// The game so far in `GameLog` text form — the same format `bin/advise`
+/// reads.
+///
+/// This is what makes a browser game worth keeping: the engine is
+/// deterministic given a kingdom, a seed and a move list, so these few lines
+/// reconstruct every position exactly. A game a human won can be replayed
+/// afterwards and the AI asked, at any ply, what it would have done — which is
+/// the only source of information about the AI's blind spots that self-play
+/// cannot produce.
+#[no_mangle]
+pub extern "C" fn dom_log_text() {
+    let out = SESSION.with(|s| match s.borrow().as_ref() {
+        Some(sess) => {
+            let mut log = GameLog::new(sess.kingdom.clone(), 2, sess.seed);
+            log.moves = sess.history.iter().map(|(_, m)| *m).collect();
+            log.to_text()
+        }
+        None => String::new(),
+    });
+    put(out);
+}
+
+/// Every move so far, with who made it, for the on-screen log.
+#[no_mangle]
+pub extern "C" fn dom_history_json() {
+    let out = SESSION.with(|s| match s.borrow().as_ref() {
+        Some(sess) => {
+            let items: Vec<String> = sess
+                .history
+                .iter()
+                .map(|(p, m)| {
+                    format!(
+                        "{{\"you\":{},\"label\":\"{}\"}}",
+                        *p == sess.human,
+                        esc(&format!("{m}"))
+                    )
+                })
+                .collect();
+            format!("[{}]", items.join(","))
+        }
+        None => "[]".to_string(),
+    });
+    put(out);
 }
 
 /// 1 once the game has finished.

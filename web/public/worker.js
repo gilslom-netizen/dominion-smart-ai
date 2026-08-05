@@ -49,7 +49,8 @@ async function boot() {
     'dom_new_game', 'dom_state_json', 'dom_apply', 'dom_ai_move',
     'dom_is_over', 'dom_human_to_move', 'dom_clear_log',
     'dom_undo', 'dom_undo_depth', 'dom_play_all_treasures',
-    'dom_pick', 'dom_clear_picks', 'dom_pool_json', 'dom_ptr', 'dom_len',
+    'dom_pick', 'dom_clear_picks', 'dom_cards_json', 'dom_ptr', 'dom_len',
+    'dom_log_text', 'dom_history_json',
   ];
   const missing = required.filter((n) => typeof wasm[n] !== 'function');
   if (missing.length) {
@@ -95,9 +96,24 @@ self.onmessage = async (e) => {
   await ready;
   const msg = e.data;
 
-  if (msg.type === 'pool') {
-    wasm.dom_pool_json();
-    self.postMessage({ type: 'pool', pool: readJson() });
+  if (msg.type === 'cards') {
+    wasm.dom_cards_json();
+    self.postMessage({ type: 'cards', cards: readJson() });
+    return;
+  }
+
+  if (msg.type === 'history') {
+    wasm.dom_history_json();
+    self.postMessage({ type: 'history', history: readJson() });
+    return;
+  }
+
+  // The log is plain text in the format bin/advise reads, so a game played
+  // here can be replayed and interrogated ply by ply afterwards.
+  if (msg.type === 'logtext' || msg.type === 'autolog') {
+    wasm.dom_log_text();
+    const bytes = new Uint8Array(wasm.memory.buffer, wasm.dom_ptr(), wasm.dom_len());
+    self.postMessage({ type: msg.type, text: decoder.decode(bytes) });
     return;
   }
 

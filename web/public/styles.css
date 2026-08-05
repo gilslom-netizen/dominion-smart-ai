@@ -90,25 +90,6 @@ h3 { margin: 12px 0 6px; font-size: 12px; text-transform: uppercase; letter-spac
 h3 em { font-style: normal; font-weight: 400; text-transform: none; letter-spacing: 0; }
 .note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); font-size: 11px; }
 
-/* Supply and cards */
-.supply { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; }
-.pile {
-  border: 1px solid var(--line); border-left: 3px solid var(--line);
-  border-radius: 8px; padding: 7px 9px; background: var(--bg);
-}
-.pile .name { font-weight: 600; font-size: 13px; }
-.pile .meta { color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; }
-.pile.gone { opacity: .4; }
-
-.cards { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip {
-  display: inline-flex; align-items: baseline; gap: 5px;
-  border: 1px solid var(--line); border-left: 3px solid var(--line);
-  border-radius: 7px; padding: 4px 9px; background: var(--bg); font-size: 13px;
-}
-.chip b { font-weight: 600; }
-.chip span { color: var(--muted); font-size: 11px; }
-.cards.small .chip { padding: 2px 7px; font-size: 12px; }
 
 .t-treasure { border-left-color: var(--treasure); }
 .t-victory  { border-left-color: var(--victory); }
@@ -194,3 +175,60 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .pname { font-weight: 600; }
 .pcost { color: var(--muted); font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
 .picker-actions { margin-top: 10px; }
+
+/* ---- cards as controls --------------------------------------------------
+   Every card on the board is a button. A card that is a legal move right now
+   is raised and clickable; one that is not stays visible but flat, so the
+   board does not rearrange itself between clicks and a card can still be
+   right-clicked to read it. */
+.supply { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+.cards { display: flex; flex-wrap: wrap; gap: 7px; }
+
+.card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  font: inherit; text-align: left; cursor: default;
+  border: 1px solid var(--line); border-left: 3px solid var(--line);
+  border-radius: 8px; padding: 6px 10px; background: var(--bg); color: var(--ink);
+}
+.card .cname { font-weight: 600; font-size: 13px; }
+.card .n { color: var(--muted); font-size: 11px; }
+.card .meta { color: var(--muted); font-size: 11px; }
+.card.live { cursor: pointer; box-shadow: var(--shadow); }
+.card.live:hover { border-color: var(--accent); background: var(--panel); }
+.card.live:active { transform: translateY(1px); }
+.card.dead { opacity: .5; box-shadow: none; }
+.card.gone { opacity: .3; }
+.cards.big .card { padding: 10px 14px; }
+.cards.big .card .cname { font-size: 15px; }
+.cards.small .card { padding: 3px 8px; }
+.cards.small .card .cname { font-size: 12px; font-weight: 500; }
+
+.card.t-treasure { border-left-color: var(--treasure); }
+.card.t-victory  { border-left-color: var(--victory); }
+.card.t-action   { border-left-color: var(--action); }
+.card.t-curse    { border-left-color: var(--curse); }
+
+.play-area { border-color: var(--accent); }
+.area-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.area-head h2 { margin-bottom: 0; }
+.prompt { font-size: 15px; font-weight: 600; margin: 10px 0 4px; }
+.quick { display: flex; gap: 8px; margin: 0; flex-wrap: wrap; }
+
+/* Card detail popup */
+.cardinfo {
+  position: fixed; z-index: 50; max-width: 300px;
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--accent); border-radius: 10px;
+  padding: 10px 13px; box-shadow: 0 8px 28px rgba(0,0,0,.25);
+}
+.ci-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.ci-head b { font-size: 15px; }
+.ci-head span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ci-types { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin: 2px 0 6px; }
+.ci-text { font-size: 13px; line-height: 1.45; }
+
+/* Full game log */
+.fulllog { margin: 10px 0 0; padding-left: 22px; font-size: 13px; max-height: 320px; overflow-y: auto; }
+.fulllog li { margin-bottom: 1px; }
+.fulllog li.mine { font-weight: 600; }
+.fulllog li.theirs { color: var(--muted); }

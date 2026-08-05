@@ -81,6 +81,39 @@ the search or the network changes, so `build.sh` is not optional after those.
 | `public/app.js` | rendering and clicks only — no engine calls |
 | `public/index.html`, `styles.css` | the board |
 
+## Playing the board
+
+Cards are the controls. A card in hand that can be played is raised and
+clickable; a supply pile you can afford is the same. Cards that are not a
+legal move right now stay on screen but flat, so the board never rearranges
+itself between clicks and any card can still be right-clicked to read its
+rules text. Only the choices no card can express — "Done", mostly — get a
+plain button.
+
+Right-clicking any card anywhere shows its cost, types and full text. The
+text comes from `Card::text()` in the engine and is shipped to the page in one
+call at boot, so the page keeps no copy of any card's rules and a tooltip
+costs no round trip. A test asserts every card has text and that no two share
+it.
+
+## Recording
+
+Every finished game is written to `localStorage` without being asked, and
+**Save** exports all of them as one file. There is no server — that is the
+point of the wasm build — so a game only reaches anyone else if you export it
+and send it.
+
+The format is `GameLog` text: a kingdom, a seed and a move list. The engine is
+deterministic given those, so the file reconstructs every position exactly and
+`cargo run --release --bin advise -- game.log --ply N` replays any point in it
+and reports what the AI would have played there. That is the only source of
+information about the AI's blind spots that self-play cannot produce — it can
+only ever show the AI what it already does.
+
+Recording happens automatically because the games worth having are the ones
+where something surprising happened and the player immediately wanted another
+go — exactly the moment nobody stops to press Save.
+
 ## Playing aids
 
 * **Undo** restores a whole `GameState`, RNG included. Replaying the same move

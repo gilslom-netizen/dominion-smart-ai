@@ -13,7 +13,7 @@
 <header>
   <div class="title">
     <h1>Dominion <span>Base 2E</span></h1>
-    <p class="sub">ISMCTS + a trained policy network, running entirely in your browser.</p>
+    <p class="sub">Click a card to play or buy it. Right-click any card to read it.</p>
   </div>
   <div class="controls">
     <label>Seed <input id="seed" type="number" value="" placeholder="random"></label>
@@ -32,7 +32,7 @@
 
 <details id="picker">
   <summary>Choose kingdom cards <span id="pickcount" class="note">— none pinned, all 10 random</span></summary>
-  <p class="note">Pin as few or as many as you like; the rest are dealt at random. Pinning nothing gives a fully random kingdom.</p>
+  <p class="note">Pin as few or as many as you like; the rest are dealt at random.</p>
   <div id="pool" class="pool"></div>
   <div class="picker-actions">
     <button id="clearpicks" class="secondary">Clear all</button>
@@ -41,23 +41,43 @@
 
 <main>
   <section id="board">
-    <div class="panel supply-panel">
+    <div class="panel">
       <h2>Supply <span id="empty-note" class="note"></span></h2>
       <div id="supply" class="supply"></div>
     </div>
 
-    <div class="panel">
-      <h2>Your hand</h2>
-      <div id="hand" class="cards"></div>
+    <div class="panel play-area">
+      <div class="area-head">
+        <h2>Your turn</h2>
+        <div class="quick">
+          <button id="playall" class="secondary hidden">Play all Treasures</button>
+          <button id="undo" class="secondary" disabled>Undo</button>
+        </div>
+      </div>
+
+      <div id="thinking" class="thinking hidden"><span class="dot"></span>the AI is searching…</div>
+      <p id="prompt" class="prompt">Loading the engine…</p>
+
+      <h3>Hand</h3>
+      <div id="hand" class="cards big"></div>
+
       <div id="inplay-wrap" class="hidden">
         <h3>In play</h3>
         <div id="inplay" class="cards"></div>
       </div>
+
       <div class="stats">
         <div><b id="st-actions">1</b><span>actions</span></div>
         <div><b id="st-buys">1</b><span>buys</span></div>
         <div><b id="st-coins">$0</b><span>coins</span></div>
       </div>
+
+      <div id="otherwrap" class="hidden">
+        <h3 id="other-title">Other choices</h3>
+        <div id="options" class="options"></div>
+      </div>
+
+      <div id="result" class="result hidden"></div>
     </div>
 
     <div class="panel">
@@ -76,32 +96,37 @@
   </section>
 
   <aside id="side">
-    <div class="panel sticky">
-      <div id="thinking" class="thinking hidden"><span class="dot"></span>the AI is searching…</div>
-      <h2 id="prompt">Loading the engine…</h2>
-      <div class="quick">
-        <button id="playall" class="secondary hidden">Play all Treasures</button>
-        <button id="undo" class="secondary" disabled>Undo</button>
-      </div>
-      <div id="options" class="options"></div>
-      <div id="result" class="result hidden"></div>
-    </div>
-
     <div class="panel">
       <h2>The AI played</h2>
       <ol id="ailog" class="ailog"><li class="muted">nothing yet</li></ol>
     </div>
+
+    <div class="panel">
+      <div class="area-head">
+        <h2>Game log</h2>
+        <div class="quick">
+          <button id="togglelog" class="secondary">Show</button>
+          <button id="savelog" class="secondary">Save</button>
+        </div>
+      </div>
+      <p class="note">Every game is recorded. The saved file replays exactly, so any
+        position in it can be handed back to the AI afterwards.</p>
+      <ol id="fulllog" class="fulllog hidden"></ol>
+    </div>
   </aside>
 </main>
+
+<div id="cardinfo" class="cardinfo hidden" role="dialog" aria-modal="false">
+  <div class="ci-head"><b id="ci-name"></b><span id="ci-cost"></span></div>
+  <div id="ci-types" class="ci-types"></div>
+  <div id="ci-text" class="ci-text"></div>
+</div>
 
 <footer>
   <p>
     No server: the engine and the search are compiled to WebAssembly and run on
-    your machine. The AI is strongest at buying decisions and plays a
-    money-leaning game — if you can build a working engine on the kingdom you
-    are dealt, that is where it is beatable. Undo restores the position
-    exactly, including the shuffle, so it lets you reconsider a choice but not
-    re-roll a bad draw.
+    your machine. Undo restores the position exactly, including the shuffle, so
+    it lets you reconsider a choice but not re-roll a bad draw.
   </p>
 </footer>
 

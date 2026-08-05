@@ -626,3 +626,40 @@ fn ties_are_broken_by_fewer_turns() {
     g.state.players[1].turns = 10;
     assert_eq!(g.state.results(), vec![0.5, 0.5], "equal turns is a real tie");
 }
+
+/// Every card must describe itself. A blank or duplicated description is the
+/// kind of thing nobody notices until a player right-clicks the one card they
+/// did not already understand.
+#[test]
+fn every_card_has_its_own_rules_text() {
+    use dominion_core::ALL_CARDS;
+    let mut seen: Vec<(&str, Card)> = Vec::new();
+    for &c in ALL_CARDS.iter() {
+        let t = c.text();
+        assert!(!t.trim().is_empty(), "{c} has no rules text");
+        assert!(
+            !t.contains("  "),
+            "{c}'s text has a line-continuation gap: {t:?}"
+        );
+        if let Some((_, other)) = seen.iter().find(|(s, _)| *s == t) {
+            panic!("{c} and {other} share the same rules text: {t:?}");
+        }
+        seen.push((t, c));
+    }
+}
+
+/// The cards that say "+N Cards" or "+$N" should agree with what the engine
+/// actually does, at least for the ones whose whole effect is that phrase.
+#[test]
+fn simple_card_texts_match_the_engine() {
+    let cases = [
+        (Smithy, "+3 Cards."),
+        (Village, "+1 Card, +2 Actions."),
+        (Laboratory, "+2 Cards, +1 Action."),
+        (Festival, "+2 Actions, +1 Buy, +$2."),
+        (Market, "+1 Card, +1 Action, +1 Buy, +$1."),
+    ];
+    for (card, want) in cases {
+        assert_eq!(card.text(), want, "{card}'s text drifted");
+    }
+}
