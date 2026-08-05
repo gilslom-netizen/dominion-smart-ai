@@ -663,3 +663,32 @@ fn simple_card_texts_match_the_engine() {
         assert_eq!(card.text(), want, "{card}'s text drifted");
     }
 }
+
+/// Card faces are small, so the summary has to stay short — and it has to be
+/// unique, because the whole reason it exists is telling similar cards apart.
+#[test]
+fn every_card_summary_is_short_and_distinct() {
+    use dominion_core::ALL_CARDS;
+    let mut seen: Vec<(&str, Card)> = Vec::new();
+    for &c in ALL_CARDS.iter() {
+        let sum = c.summary();
+        assert!(!sum.trim().is_empty(), "{c} has no summary");
+        assert!(
+            sum.chars().count() <= 28,
+            "{c}'s summary is {} chars, too long for a card face: {sum:?}",
+            sum.chars().count()
+        );
+        if let Some((_, other)) = seen.iter().find(|(s, _)| *s == sum) {
+            panic!("{c} and {other} summarise identically as {sum:?}");
+        }
+        seen.push((sum, c));
+    }
+}
+
+/// The pair that caused a real misbuy: these must not read alike.
+#[test]
+fn library_and_laboratory_do_not_look_the_same() {
+    assert_ne!(Library.summary(), Laboratory.summary());
+    assert!(Laboratory.summary().contains("+2 Cards"));
+    assert!(Library.summary().contains('7'));
+}

@@ -52,7 +52,8 @@ function render(s) {
   $('supply').innerHTML = s.supply
     .map((p) => {
       const mv = s.over ? null : moveFor('buy', p.card);
-      const meta = `<span class="meta">$${p.cost} · ${p.left} left</span>`;
+      const sum = CARDS[p.card]?.summary || '';
+      const meta = `<span class="sum">${sum}</span><span class="meta">$${p.cost} · ${p.left} left</span>`;
       return card(p.card, 1, mv, meta).replace('class="card', `class="pile card${p.left === 0 ? ' gone' : ''}`);
     })
     .join('');
@@ -63,7 +64,14 @@ function render(s) {
   // what most card effects ask for.
   $('hand').innerHTML =
     s.you.hand
-      .map((c) => card(c.card, c.n, s.over ? null : moveFor('play', c.card) ?? moveFor('pick', c.card)))
+      .map((c) =>
+        card(
+          c.card,
+          c.n,
+          s.over ? null : moveFor('play', c.card) ?? moveFor('pick', c.card),
+          `<span class="sum">${CARDS[c.card]?.summary || ''}</span>`
+        )
+      )
       .join('') || '<span class="muted">empty</span>';
 
   const hasPlay = s.you.inPlay.length > 0;

@@ -232,3 +232,10 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .fulllog li { margin-bottom: 1px; }
 .fulllog li.mine { font-weight: 600; }
 .fulllog li.theirs { color: var(--muted); }
+
+/* The effect, on the card itself. A tooltip only helps a player who already
+   suspects they need one; buying Library while meaning Laboratory is a
+   mistake made confidently. */
+.card .sum { color: var(--muted); font-size: 10.5px; line-height: 1.3; }
+.cards.big .card .sum { font-size: 12px; }
+.cards.small .card .sum { display: none; }

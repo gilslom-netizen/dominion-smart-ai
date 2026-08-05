@@ -311,12 +311,13 @@ pub extern "C" fn dom_cards_json() {
                 kinds.push("Reaction");
             }
             format!(
-                "{{\"index\":{},\"card\":\"{}\",\"cost\":{},\"kingdom\":{},\"types\":\"{}\",\"text\":\"{}\"}}",
+                "{{\"index\":{},\"card\":\"{}\",\"cost\":{},\"kingdom\":{},\"types\":\"{}\",\"summary\":\"{}\",\"text\":\"{}\"}}",
                 *c as usize,
                 esc(&format!("{c}")),
                 c.cost(),
                 KINGDOM_CARDS.contains(c),
                 kinds.join(" – "),
+                esc(c.summary()),
                 esc(c.text())
             )
         })

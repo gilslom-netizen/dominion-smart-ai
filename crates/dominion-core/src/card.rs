@@ -243,6 +243,58 @@ impl Card {
         }
     }
 
+    /// A very short effect summary, for printing on the card itself.
+    ///
+    /// Full rules text does not fit on a card in a supply grid, and leaving it
+    /// to a tooltip assumes the player knows they need to ask. Library and
+    /// Laboratory are the case that matters: adjacent in the alphabet, one
+    /// letter apart at a glance, and completely different cards. A player who
+    /// buys one meaning the other has been failed by the display, not by their
+    /// own attention.
+    pub const fn summary(self) -> &'static str {
+        use Card::*;
+        match self {
+            Copper => "$1",
+            Silver => "$2",
+            Gold => "$3",
+            Estate => "1 VP",
+            Duchy => "3 VP",
+            Province => "6 VP",
+            Curse => "-1 VP",
+
+            Cellar => "+1 Act, discard to redraw",
+            Chapel => "trash up to 4",
+            Moat => "+2 Cards, blocks attacks",
+
+            Harbinger => "+1 Card +1 Act, topdeck",
+            Merchant => "+1 Card +1 Act, Silver +$1",
+            Vassal => "+$2, play top card",
+            Village => "+1 Card, +2 Actions",
+            Workshop => "gain a card up to $4",
+
+            Bureaucrat => "gain Silver on deck, attack",
+            Gardens => "1 VP per 10 cards",
+            Militia => "+$2, they discard to 3",
+            Moneylender => "trash a Copper for +$3",
+            Poacher => "+1 Card +1 Act +$1",
+            Remodel => "trash, gain +$2 more",
+            Smithy => "+3 Cards",
+            ThroneRoom => "play an Action twice",
+
+            Bandit => "gain Gold, trash theirs",
+            CouncilRoom => "+4 Cards +1 Buy",
+            Festival => "+2 Actions +1 Buy +$2",
+            Laboratory => "+2 Cards, +1 Action",
+            Library => "draw up to 7 cards",
+            Market => "+1 Card +1 Act +1 Buy +$1",
+            Mine => "upgrade a Treasure",
+            Sentry => "+1 Card +1 Act, sift 2",
+            Witch => "+2 Cards, they gain Curse",
+
+            Artisan => "gain a $5 to hand, topdeck",
+        }
+    }
+
     pub const fn cost(self) -> u8 {
         use Card::*;
         match self {
