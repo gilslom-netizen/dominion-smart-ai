@@ -61,7 +61,12 @@ struct Session {
     /// The cloned RNG is the point — restoring it means undoing and replaying
     /// the same move gives the same shuffle, so undo cannot be used to fish
     /// for a better draw.
-    undo: Vec<(GameState, Vec<String>)>,
+    /// State, AI narration, and **how long the move history was** at that
+    /// point. The length matters: `dom_play_all_treasures` pushes several
+    /// moves under a single snapshot, so popping one history entry per undo
+    /// left the recorded log describing a game that never happened. It
+    /// replayed fine right up to the first undone batch and then diverged.
+    undo: Vec<(GameState, Vec<String>, usize)>,
 }
 
 /// Kingdom cards the player pinned before starting, filled out at random.
@@ -400,7 +405,9 @@ pub extern "C" fn dom_apply(index: u32) -> u32 {
         // Snapshot before the move, not after, so undo lands on the choice
         // rather than on its consequences.
         if d.player == sess.human {
-            sess.undo.push((sess.game.state.clone(), sess.last_ai.clone()));
+            let mark = sess.history.len();
+            sess.undo
+                .push((sess.game.state.clone(), sess.last_ai.clone(), mark));
             if sess.undo.len() > 300 {
                 sess.undo.remove(0);
             }
@@ -424,12 +431,12 @@ pub extern "C" fn dom_undo() -> u32 {
     SESSION.with(|s| {
         let mut b = s.borrow_mut();
         let Some(sess) = b.as_mut() else { return 0 };
-        let Some((state, log)) = sess.undo.pop() else {
+        let Some((state, log, mark)) = sess.undo.pop() else {
             return 0;
         };
         sess.game.state = state;
         sess.last_ai = log;
-        sess.history.pop();
+        sess.history.truncate(mark);
         // Taking the move back takes the warning back with it.
         sess.ai_first_province = sess.game.state.players[1 - sess.human]
             .all_cards()
@@ -481,7 +488,9 @@ pub extern "C" fn dom_play_all_treasures() -> u32 {
             // One snapshot for the whole batch: undo should take back "played
             // my Treasures", not one Copper of it.
             if !snapshotted {
-                sess.undo.push((sess.game.state.clone(), sess.last_ai.clone()));
+                let mark = sess.history.len();
+                sess.undo
+                    .push((sess.game.state.clone(), sess.last_ai.clone(), mark));
                 snapshotted = true;
             }
             if sess.game.apply(mv).is_err() {
