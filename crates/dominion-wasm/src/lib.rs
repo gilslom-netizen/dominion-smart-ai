@@ -213,7 +213,7 @@ fn state_json(s: &Session) -> String {
         "{{\"over\":{over},\"human\":{},\"toMove\":{whose},\"fromHand\":{from_hand},\
          \"aiFirstProvince\":{},\"prompt\":\"{}\",\
          \"options\":{options},\"supply\":[{}],\"emptyPiles\":{empty},\
-         \"you\":{{\"hand\":{},\"all\":{},\"inPlay\":{},\"actions\":{},\"buys\":{},\
+         \"you\":{{\"hand\":{},\"all\":{},\"inPlay\":{},\"deck\":{},\"discard\":{},\"actions\":{},\"buys\":{},\
          \"coins\":{},\"vp\":{},\"cards\":{}}},\
          \"ai\":{{\"all\":{},\"vp\":{},\"cards\":{}}},\
          \"scores\":{{\"you\":{},\"ai\":{}}},\"aiLog\":[{}],\"turns\":{}}}",
@@ -224,6 +224,8 @@ fn state_json(s: &Session) -> String {
         cards_json(&me.hand),
         cards_json(&me.all_cards().collect::<Vec<_>>()),
         cards_json(&me.play),
+        me.deck.len(),
+        me.discard.len(),
         me.actions,
         me.buys,
         me.coins,

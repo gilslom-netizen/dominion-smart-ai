@@ -84,6 +84,15 @@ function render(s) {
   $('st-actions').textContent = s.you.actions;
   $('st-buys').textContent = s.you.buys;
   $('st-coins').textContent = '$' + s.you.coins;
+  // Without these, "I played a card that draws and drew nothing" is
+  // unanswerable from the screen. It happens whenever the deck and the
+  // discard are both empty, which a Chapel deck reaches often.
+  $('st-deck').textContent = s.you.deck;
+  $('st-discard').textContent = s.you.discard;
+  $('st-deck').parentElement.classList.toggle(
+    'empty-warn',
+    s.you.deck === 0 && s.you.discard === 0
+  );
 
   $('you-all').innerHTML = s.you.all.map((c) => card(c.card, c.n, null)).join('');
   $('ai-all').innerHTML = s.ai.all.map((c) => card(c.card, c.n, null)).join('');

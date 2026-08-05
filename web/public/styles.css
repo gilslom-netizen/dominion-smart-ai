@@ -250,3 +250,7 @@ body.no-summaries .card .sum { display: none; }
   padding: 9px 12px; margin-bottom: 10px;
   font-size: 13px; font-weight: 600;
 }
+
+.stats .sep { border-left: 1px solid var(--line); padding-left: 18px; margin-left: 4px; }
+/* Nothing left to draw from: the reason a "+1 Card" can draw nothing. */
+.stats .empty-warn b, .stats .empty-warn span { color: var(--curse); }

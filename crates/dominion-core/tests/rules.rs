@@ -725,3 +725,35 @@ fn hand_picking_contexts_are_marked_as_such() {
         assert!(!ctx.picks_from_hand(), "{ctx:?} does not read the hand");
     }
 }
+
+/// Drawing with nothing left to draw is not a bug, and it looks like one.
+/// Village still grants its +2 Actions; the card simply does not arrive,
+/// because the deck and the discard are both empty. A thinned Chapel deck
+/// reaches that state often, which is why the client shows both counts.
+#[test]
+fn village_grants_actions_even_with_nothing_left_to_draw() {
+    let mut g = scenario(&[Village, Chapel], |s| {
+        s.players[0].hand = vec![Village, Chapel, Estate, Estate];
+        s.players[0].deck.clear();
+        s.players[0].discard.clear();
+    });
+    let before = g.state.players[0].hand.len();
+    play(&mut g, Move::Play(Village));
+    let pl = &g.state.players[0];
+    assert_eq!(pl.actions, 2, "+2 Actions still applies");
+    assert_eq!(pl.hand.len(), before - 1, "Village left hand, nothing was drawn");
+    assert!(pl.deck.is_empty() && pl.discard.is_empty());
+}
+
+/// With one card sitting in the discard, the same play reshuffles and draws
+/// it — so the difference really is "nothing to draw", not "draw is broken".
+#[test]
+fn village_reshuffles_the_discard_when_the_deck_is_empty() {
+    let mut g = scenario(&[Village], |s| {
+        s.players[0].hand = vec![Village];
+        s.players[0].deck.clear();
+        s.players[0].discard = vec![Gold];
+    });
+    play(&mut g, Move::Play(Village));
+    assert_eq!(count(&g.state.players[0].hand, Gold), 1, "drew from the reshuffle");
+}
