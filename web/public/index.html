@@ -52,9 +52,13 @@
         <div class="quick">
           <button id="playall" class="secondary hidden">Play all Treasures</button>
           <button id="undo" class="secondary" disabled>Undo</button>
+          <button id="togglesum" class="secondary" aria-pressed="true">Card text: on</button>
         </div>
       </div>
 
+      <div id="province-alert" class="alert hidden">
+        The AI bought the first Province — the endgame clock has started.
+      </div>
       <div id="thinking" class="thinking hidden"><span class="dot"></span>the AI is searching…</div>
       <p id="prompt" class="prompt">Loading the engine…</p>
 

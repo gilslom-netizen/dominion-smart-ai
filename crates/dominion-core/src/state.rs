@@ -117,6 +117,28 @@ impl Ctx {
     pub fn is_main_phase(self) -> bool {
         matches!(self, Ctx::ActionPhase | Ctx::BuyPhase)
     }
+
+    /// Whether the card being chosen is one in the player's hand.
+    ///
+    /// A UI that lets you click a card to choose it has to know this, because
+    /// the alternative is a lie: Vassal's prompt is about the card it just
+    /// discarded, and highlighting an identically-named card in hand tells the
+    /// player they are about to play *that* one. The same goes for Sentry and
+    /// Bandit, which ask about cards revealed off the deck, and Harbinger,
+    /// which asks about the discard pile.
+    pub fn picks_from_hand(self) -> bool {
+        use Ctx::*;
+        match self {
+            ActionPhase | BuyPhase => true,
+            CellarDiscard | ChapelTrash | MilitiaDiscard | PoacherDiscard | RemodelTrash
+            | ThroneRoomPlay | MineTrash | ArtisanTopdeck | BureaucratReveal | MoatReveal
+            | MoneylenderTrash | LibrarySetAside => true,
+            // Not in hand: the discarded card, the revealed cards, the discard
+            // pile, and anything gained from the supply.
+            VassalPlay | HarbingerTopdeck | WorkshopGain | RemodelGain | MineGain | ArtisanGain
+            | BanditTrash | SentryTrash | SentryDiscard | SentryOrder => false,
+        }
+    }
 }
 
 /// A parked decision: whose it is, what it is about, and what is legal.

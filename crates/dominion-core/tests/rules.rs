@@ -692,3 +692,36 @@ fn library_and_laboratory_do_not_look_the_same() {
     assert!(Laboratory.summary().contains("+2 Cards"));
     assert!(Library.summary().contains('7'));
 }
+
+/// Vassal asks about the card it just discarded, not one in hand. A client
+/// that maps the offered `Play(card)` onto a same-named card in hand shows the
+/// player the wrong card — which is exactly what happened once this project
+/// had a click-the-card board.
+#[test]
+fn vassal_asks_about_the_discarded_card_not_the_hand() {
+    let mut g = scenario(&[Vassal, Village], |s| {
+        s.players[0].hand = vec![Vassal, Vassal];
+        s.players[0].deck = vec![Copper, Village]; // Village on top
+    });
+    play(&mut g, Move::Play(Vassal));
+    expect_ctx(&g, Ctx::VassalPlay);
+    assert!(!Ctx::VassalPlay.picks_from_hand());
+
+    // The offered card is the discarded Village, and the second Vassal is
+    // still sitting in hand untouched.
+    let d = g.decision().expect("a pending decision");
+    assert!(d.options.contains(&Move::Play(Village)));
+    assert_eq!(count(&g.state.players[0].hand, Vassal), 1);
+}
+
+/// The main phases and the effects that read your hand must say so, or a
+/// click-the-card board would stop working for all of them.
+#[test]
+fn hand_picking_contexts_are_marked_as_such() {
+    for ctx in [Ctx::ActionPhase, Ctx::BuyPhase, Ctx::ChapelTrash, Ctx::ThroneRoomPlay] {
+        assert!(ctx.picks_from_hand(), "{ctx:?} reads the hand");
+    }
+    for ctx in [Ctx::VassalPlay, Ctx::HarbingerTopdeck, Ctx::SentryTrash, Ctx::WorkshopGain] {
+        assert!(!ctx.picks_from_hand(), "{ctx:?} does not read the hand");
+    }
+}

@@ -46,6 +46,13 @@ struct Session {
     /// reconstructed exactly.
     history: Vec<(usize, Move)>,
     last_ai: Vec<String>,
+    /// Set when the AI buys a Province before the player has bought one.
+    ///
+    /// The Province pile is the game's clock, and the first one is when the
+    /// endgame starts. A player who does not notice the opponent starting it
+    /// loses turns they did not know were the last ones — which happened
+    /// twice in three games before this existed.
+    ai_first_province: bool,
     /// One snapshot per human decision, for undo.
     ///
     /// A whole `GameState` rather than a move list, because the engine is a
@@ -178,8 +185,8 @@ fn state_json(s: &Session) -> String {
 
     let over = s.game.is_over();
     let scores = st.scores();
-    let (options, ctx, whose) = if over {
-        (String::from("[]"), String::new(), -1i32)
+    let (options, ctx, whose, from_hand) = if over {
+        (String::from("[]"), String::new(), -1i32, false)
     } else {
         let d = s.game.decision().expect("live game has a decision");
         let opts: Vec<String> = d.options.iter().map(move_json).collect();
@@ -187,6 +194,7 @@ fn state_json(s: &Session) -> String {
             format!("[{}]", opts.join(",")),
             ctx_label(d.ctx).to_string(),
             d.player as i32,
+            d.ctx.picks_from_hand(),
         )
     };
 
@@ -197,13 +205,15 @@ fn state_json(s: &Session) -> String {
         .collect();
 
     format!(
-        "{{\"over\":{over},\"human\":{},\"toMove\":{whose},\"prompt\":\"{}\",\
+        "{{\"over\":{over},\"human\":{},\"toMove\":{whose},\"fromHand\":{from_hand},\
+         \"aiFirstProvince\":{},\"prompt\":\"{}\",\
          \"options\":{options},\"supply\":[{}],\"emptyPiles\":{empty},\
          \"you\":{{\"hand\":{},\"all\":{},\"inPlay\":{},\"actions\":{},\"buys\":{},\
          \"coins\":{},\"vp\":{},\"cards\":{}}},\
          \"ai\":{{\"all\":{},\"vp\":{},\"cards\":{}}},\
          \"scores\":{{\"you\":{},\"ai\":{}}},\"aiLog\":[{}],\"turns\":{}}}",
         s.human,
+        s.ai_first_province,
         esc(&ctx),
         supply.join(","),
         cards_json(&me.hand),
@@ -350,6 +360,7 @@ pub extern "C" fn dom_new_game(seed: u32, human_first: u32, worlds: u32, iterati
         net: Net::from_bytes(NET_BYTES),
         history: Vec::new(),
         last_ai: Vec::new(),
+        ai_first_province: false,
         undo: Vec::new(),
     };
     SESSION.with(|s| *s.borrow_mut() = Some(session));
@@ -419,6 +430,13 @@ pub extern "C" fn dom_undo() -> u32 {
         sess.game.state = state;
         sess.last_ai = log;
         sess.history.pop();
+        // Taking the move back takes the warning back with it.
+        sess.ai_first_province = sess.game.state.players[1 - sess.human]
+            .all_cards()
+            .any(|c| c == Card::Province)
+            && !sess.game.state.players[sess.human]
+                .all_cards()
+                .any(|c| c == Card::Province);
         1
     })
 }
@@ -498,6 +516,14 @@ pub extern "C" fn dom_ai_move() -> u32 {
         };
         if sess.game.apply(mv).is_err() {
             return 0;
+        }
+        if let Move::Buy(Card::Province) = mv {
+            let human_has = sess.game.state.players[sess.human]
+                .all_cards()
+                .any(|c| c == Card::Province);
+            if !human_has {
+                sess.ai_first_province = true;
+            }
         }
         // Only narrate what an opponent's move would reveal at a real table.
         if d.options.len() > 1 {

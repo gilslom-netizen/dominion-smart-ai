@@ -60,15 +60,18 @@ function render(s) {
   $('empty-note').textContent =
     s.emptyPiles > 0 ? `${s.emptyPiles} pile${s.emptyPiles > 1 ? 's' : ''} empty — 3 ends the game` : '';
 
-  // Hand: playable cards are clickable, and so are Select choices, which is
-  // what most card effects ask for.
+  // Hand cards are only bound to a move when the decision is actually about
+  // a card in hand. Vassal is the case that made this necessary: it asks about
+  // the card it just discarded, so binding by name lit up the identically
+  // named card in hand and told the player they were playing that one.
+  const handLive = !s.over && s.fromHand;
   $('hand').innerHTML =
     s.you.hand
       .map((c) =>
         card(
           c.card,
           c.n,
-          s.over ? null : moveFor('play', c.card) ?? moveFor('pick', c.card),
+          handLive ? moveFor('play', c.card) ?? moveFor('pick', c.card) : null,
           `<span class="sum">${CARDS[c.card]?.summary || ''}</span>`
         )
       )
@@ -92,6 +95,7 @@ function render(s) {
     : '<li class="muted">nothing to show</li>';
 
   if (s.over) {
+    $('province-alert').classList.add('hidden');
     $('prompt').textContent = 'Game over';
     $('otherwrap').classList.add('hidden');
     $('playall').classList.add('hidden');
@@ -111,6 +115,7 @@ function render(s) {
   $('result').className = 'result hidden';
   $('prompt').textContent = s.prompt;
   $('undo').disabled = !s.canUndo;
+  $('province-alert').classList.toggle('hidden', !s.aiFirstProvince);
   $('playall').classList.toggle(
     'hidden',
     !s.options.some((o) => o.kind === 'play' && typeOf(o.card) === 'treasure')
@@ -203,6 +208,21 @@ $('togglelog').addEventListener('click', () => {
 // player exports it, and waiting for someone to press Save before starting the
 // next game would lose exactly the games worth having: the ones where
 // something surprising happened and they immediately wanted another go.
+const SUMMARY_KEY = 'dominion-summaries';
+let showSummaries = localStorage.getItem(SUMMARY_KEY) !== 'off';
+
+function applySummaryPref() {
+  document.body.classList.toggle('no-summaries', !showSummaries);
+  $('togglesum').textContent = showSummaries ? 'Card text: on' : 'Card text: off';
+  $('togglesum').setAttribute('aria-pressed', String(showSummaries));
+}
+
+$('togglesum').addEventListener('click', () => {
+  showSummaries = !showSummaries;
+  localStorage.setItem(SUMMARY_KEY, showSummaries ? 'on' : 'off');
+  applySummaryPref();
+});
+
 const STORE = 'dominion-games';
 
 function stored() {
@@ -367,5 +387,6 @@ $('clearpicks').addEventListener('click', (ev) => {
 
 $('newgame').addEventListener('click', newGame);
 worker.postMessage({ type: 'cards' });
+applySummaryPref();
 updateSaveLabel();
 newGame();
