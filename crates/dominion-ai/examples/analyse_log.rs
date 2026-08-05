@@ -102,6 +102,27 @@ fn main() {
                 log.moves.len()
             );
         }
+        // A log that replays without erroring is not necessarily the game that
+        // was played. The undo bug left extra moves behind, and if those moves
+        // happen to be legal in the shifted position the replay succeeds and
+        // silently describes a different game — with every later move
+        // attributed to the wrong player. A game that does not end in a real
+        // ending is the tell.
+        let ended = end.is_over();
+        let provinces_gone = end.state.supply_of(Card::Province) == 0;
+        let empty_piles = (0..dominion_core::NUM_CARDS)
+            .filter(|&i| end.state.in_supply[i] && end.state.supply[i] == 0)
+            .count();
+        if !ended {
+            println!(
+                "WARNING: this log replays but the game never ends — {} Provinces left, \
+                 {empty_piles} empty piles. Recorded before the undo fix, so the move list \
+                 is probably not the game that was played, and per-player attribution \
+                 below is unreliable.",
+                end.state.supply_of(Card::Province)
+            );
+        }
+
         let scores = end.state.scores();
 
         println!("=== game {} — seed {} ===", gi + 1, log.seed);
@@ -121,6 +142,9 @@ fn main() {
                 None => println!("  never bought a Province"),
             }
         }
+        println!(
+            "\nended properly: {ended}  (Provinces gone: {provinces_gone}, empty piles: {empty_piles})"
+        );
         let winner = if scores[0] > scores[1] {
             "player 0"
         } else if scores[1] > scores[0] {

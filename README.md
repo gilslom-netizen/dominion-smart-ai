@@ -681,6 +681,44 @@ and reproduces it. The last link adds nothing, which is why fixing the
 network was never going to help — and why eight training-side experiments
 measured zero.
 
+## A junk sink found by a human losing 59–5 to it
+
+Six recorded games came back from a human player. In one, the AI finished on
+**5 points**, holding five Chapels and twelve Silvers.
+
+`gain_preference` ended in a catch-all: `is_action() => 300 + cost`. Below
+Silver's 700, so it never competed for a real buy — but above Estate's -100
+and Copper's -50, so whenever nothing better was affordable it won by
+default. With no cap on copies and no check that the deck could use the card,
+$2 turns became a junk sink. Reproducing that kingdom synthetically shows the
+same shape with a different card: Cellar bought 14 times.
+
+Requiring a first copy and terminal room, and otherwise ranking the card
+below the threshold to buy anything at all — so the turn passes instead:
+
+| | avg vs the ladder |
+|---|---|
+| heuristic, before | 64.14% |
+| heuristic, after | **67.27%** |
+| NetMCTS 4x200, before | 86.60% |
+| NetMCTS 4x200, after | 86.88% |
+
+Three points for the heuristic. Much less for the network, which is expected:
+the network was trained against the old prior and still carries its
+preferences, so it only gains where the search falls back on the heuristic.
+
+**Two lessons about the measurements, not the fix.** `buy_profile` had
+reported Chapel bought 0 times out of 1772 — on a kingdom containing Moat,
+with Militia making `under_attack` true, so Moat's 670 outranked the fallback
+and hid it completely. One kingdom is not a measurement of a card ranking.
+
+And the logs needed checking before they could be read. Games recorded before
+the undo fix can replay without erroring while describing a different game,
+because extra moves left in the list stay legal in the shifted position — and
+every later move is then attributed to the wrong player. `analyse_log` now
+reports whether a game reached a real ending, which is what separates the two
+readable games in that file from the two that are not.
+
 ## Sharing self-play between machines
 
 Self-play parallelises across machines; the data did not. A 3000-game `.shard`

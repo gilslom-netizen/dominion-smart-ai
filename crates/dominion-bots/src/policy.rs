@@ -260,8 +260,15 @@ pub fn gain_preference(card: Card, state: &GameState, _player: usize, st: &DeckS
         // --- things we do not want ----------------------------------------
         Estate | Duchy | Gardens => -100,
         Copper => -50,
-        // Everything else is playable but worse than a Silver.
-        c if c.is_action() => 300 + c.cost() as i32,
+        // Everything else is playable but worse than a Silver — and only
+        // worth a first copy the deck has room to play.
+        //
+        // Without those two guards this was a $2 junk sink: with nothing
+        // better affordable it beat Estate (-100) and Copper (-50), so the
+        // search bought Chapel or Cellar over and over. One recorded game had
+        // the AI holding five Chapels, twelve Silvers and five points.
+        c if c.is_action() && owned(c) == 0 && room > 0 => 300 + c.cost() as i32,
+        c if c.is_action() => -10,
         _ => 100,
     }
 }

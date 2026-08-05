@@ -41,10 +41,23 @@ fn main() {
     let net = Net::load(&path).expect("load network");
 
     use Card::*;
-    // Every piece the Throne Room / Vassal engine needs, plus room to breathe.
-    let kingdom = vec![
-        Chapel, Festival, ThroneRoom, Vassal, Village, Laboratory, Market, Smithy, Militia, Moat,
-    ];
+    // A kingdom may be given as a comma-separated list, which is how a
+    // kingdom out of a real game's log gets reproduced here. The default is
+    // every piece the Throne Room / Vassal engine needs — and generalising
+    // from that one kingdom was a mistake worth not repeating: it contains
+    // Moat and Militia, so `under_attack` made Moat outrank the $2 fallback
+    // and hid a behaviour that shows up immediately without them.
+    let kingdom: Vec<Card> = match args.iter().find(|a| a.contains(',')) {
+        Some(list) => list
+            .split(',')
+            .filter_map(|n| Card::parse(n.trim()))
+            .collect(),
+        None => vec![
+            Chapel, Festival, ThroneRoom, Vassal, Village, Laboratory, Market, Smithy, Militia,
+            Moat,
+        ],
+    };
+    assert_eq!(kingdom.len(), 10, "a kingdom is ten cards");
     let engine_cards = [Chapel, Festival, ThroneRoom, Vassal, Village, Laboratory];
 
     let cfg = MctsConfig {
